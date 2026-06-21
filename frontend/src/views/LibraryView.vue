@@ -9,12 +9,13 @@
           placeholder="搜索节目标题或摘要..."
           class="search-input"
         />
-        <div class="filter-chips">
+        <div class="filter-chips" role="group" aria-label="按状态筛选节目">
           <button
             v-for="filter in filters"
             :key="filter.value"
             @click="setFilter(filter.value)"
             :class="{ active: currentFilter === filter.value }"
+            :aria-current="currentFilter === filter.value ? 'true' : undefined"
             class="filter-chip"
           >
             {{ filter.label }}
@@ -26,18 +27,22 @@
     <!-- 粘贴输入区 -->
     <div class="paste-section">
       <div class="input-group">
+        <label for="paste-input" class="sr-only">播客链接或本地文件路径</label>
         <input
+          id="paste-input"
           v-model="inputText"
           @keyup.enter="handlePaste"
           placeholder="粘贴播客链接 (YouTube / Bilibili / 抖音 / 小宇宙) 或本地文件路径..."
           class="paste-input"
           :disabled="isPasting"
+          :aria-invalid="!!error"
+          :aria-describedby="error ? 'paste-error' : undefined"
         />
         <button @click="handlePaste" :disabled="!inputText.trim() || isPasting" class="paste-btn">
           {{ isPasting ? '处理中...' : '添加' }}
         </button>
       </div>
-      <div v-if="error" class="error-message">{{ error }}</div>
+      <div v-if="error" id="paste-error" class="error-message" role="alert" aria-live="polite">{{ error }}</div>
     </div>
 
     <!-- 节目列表 -->
@@ -129,8 +134,8 @@
 
     <!-- 删除确认对话框 -->
     <div v-if="showDeleteDialog" class="dialog-overlay" @click.self="cancelDelete">
-      <div class="dialog-box">
-        <h3 class="dialog-title">确认删除</h3>
+      <div class="dialog-box" role="dialog" aria-modal="true" aria-labelledby="delete-dialog-title">
+        <h3 id="delete-dialog-title" class="dialog-title">确认删除</h3>
         <p class="dialog-message">
           确定要删除节目「{{ episodeToDelete?.title }}」吗？
         </p>
@@ -143,8 +148,8 @@
 
     <!-- 取消确认对话框 -->
     <div v-if="showCancelDialog" class="dialog-overlay" @click.self="cancelCancel">
-      <div class="dialog-box">
-        <h3 class="dialog-title">确认取消</h3>
+      <div class="dialog-box" role="dialog" aria-modal="true" aria-labelledby="cancel-dialog-title">
+        <h3 id="cancel-dialog-title" class="dialog-title">确认取消</h3>
         <p class="dialog-message">
           确定要取消节目「{{ episodeToCancel?.title }}」的处理吗？
         </p>
@@ -157,8 +162,8 @@
 
     <!-- 恢复确认对话框 -->
     <div v-if="showResumeDialog" class="dialog-overlay" @click.self="cancelResume">
-      <div class="dialog-box">
-        <h3 class="dialog-title">恢复任务</h3>
+      <div class="dialog-box" role="dialog" aria-modal="true" aria-labelledby="resume-dialog-title">
+        <h3 id="resume-dialog-title" class="dialog-title">恢复任务</h3>
         <p class="dialog-message">
           恢复节目「{{ episodeToResume?.title }}」的处理
         </p>
@@ -1025,5 +1030,18 @@ onUnmounted(() => {
   color: #dc2626;
   font-size: 13px;
   line-height: 1.4;
+}
+
+/* 仅给屏幕阅读器可见的标签，视觉隐藏但对辅助技术可见 */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 </style>

@@ -116,20 +116,24 @@
 
       <!-- 右栏：Tab 切换 -->
       <section class="content-tabs">
-        <div class="tab-header">
+        <div class="tab-header" role="tablist" aria-label="节目内容视图">
           <button
             v-for="tab in tabs"
             :key="tab.id"
             @click="activeTab = tab.id"
             class="tab-btn"
             :class="{ active: activeTab === tab.id }"
+            role="tab"
+            :aria-selected="activeTab === tab.id"
+            :id="`tab-${tab.id}`"
+            :aria-controls="`tabpanel-${tab.id}`"
           >
             {{ tab.label }}
           </button>
         </div>
 
         <!-- Tab 1: 摘要 + 金句 -->
-        <div v-show="activeTab === 'summary'" class="tab-content summary-tab">
+        <div v-show="activeTab === 'summary'" class="tab-content summary-tab" role="tabpanel" id="tabpanel-summary" aria-labelledby="tab-summary">
           <div v-if="highlight" class="verdict-card">
             <p class="tldr-text">{{ highlight.tldr_zh }}</p>
             <div class="verdict-row">
@@ -171,7 +175,7 @@
         </div>
 
         <!-- Tab 2: 转录字幕 -->
-        <div v-show="activeTab === 'transcript'" class="tab-content transcript-tab">
+        <div v-show="activeTab === 'transcript'" class="tab-content transcript-tab" role="tabpanel" id="tabpanel-transcript" aria-labelledby="tab-transcript">
           <div class="transcript-header">
             <div class="subtitle-info">
               <span class="subtitle-count">{{ formatTime(segments[segments.length - 1]?.end_ms || 0) }}</span>
@@ -233,7 +237,7 @@
         </div>
 
         <!-- Tab 3: 产品和技术洞察 -->
-        <div v-show="activeTab === 'insights'" class="tab-content insights-tab">
+        <div v-show="activeTab === 'insights'" class="tab-content insights-tab" role="tabpanel" id="tabpanel-insights" aria-labelledby="tab-insights">
           <div v-if="productInsights" class="insights-content">
             <!-- 产品洞察 -->
             <div v-if="productInsights.product_insights_zh?.length" class="insight-section">
