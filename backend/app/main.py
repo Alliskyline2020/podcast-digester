@@ -37,68 +37,19 @@ from .utils.validation import validate_raw_input
 from .utils.io import safe_read_json
 from .errors import PodcastError
 from .rate_limit import rate_limit, limiter as _global_limiter
+from .deps import data_dir, verify_admin, is_loopback as _is_loopback
+from .services.background_tasks import (
+    log_task_exception as _log_task_exception,
+    create_background_task as _create_background_task,
+    sync_episode_modules as _sync_episode_modules,
+)
 
 # 初始化logger
 logger = logging.getLogger(__name__)
 
-# ==================== 管理端认证 ====================
-
-def _is_loopback(host: Optional[str]) -> bool:
-    """判断客户端是否为 loopback（开发模式放行）"""
-    if not host:
-        return False
-    return host in ("127.0.0.1", "::1", "localhost")
-
-
-async def verify_admin(request: Request) -> None:
-    """
-    FastAPI 依赖：保护 /api/admin/* 等敏感端点。
-
-    认证策略：
-    - 若 PODCAST_DIGESTER_ADMIN_TOKEN 已配置：请求头 X-Admin-Token 必须匹配；
-      匹配失败返回 401。Loopback 也必须带 token，避免依赖网络层判断。
-    - 若未配置 token（开发默认）：仅允许 loopback 客户端；非 loopback 返回 403，
-      并提示需配置 token 才能远程访问管理端点。
-    """
-    client_host = request.client.host if request.client else None
-
-    if settings.admin_token:
-        provided = request.headers.get("X-Admin-Token", "")
-        # hmac.compare_digest 防时序攻击；处理长度不等时仍调用一次保持常数时间
-        import hmac
-        if not hmac.compare_digest(provided, settings.admin_token):
-            raise HTTPException(
-                status_code=401,
-                detail="Invalid or missing X-Admin-Token header",
-            )
-    else:
-        if not _is_loopback(client_host):
-            raise HTTPException(
-                status_code=403,
-                detail="Admin endpoints require PODCAST_DIGESTER_ADMIN_TOKEN for non-loopback access",
-            )
-
-
-# ==================== 后台任务辅助 ====================
-
-def _log_task_exception(task: asyncio.Task) -> None:
-    """asyncio.Task 完成回调：记录未捕获异常，避免被 GC 静默吞掉"""
-    if task.cancelled():
-        return
-    exc = task.exception()
-    if exc is not None:
-        logger.error(
-            f"Background task {task.get_name()} failed: {exc}",
-            exc_info=exc,
-        )
-
-
-def _create_background_task(coro, name: str) -> asyncio.Task:
-    """创建后台任务并绑定异常回调"""
-    task = asyncio.create_task(coro, name=name)
-    task.add_done_callback(_log_task_exception)
-    return task
-
+# 注：verify_admin / _is_loopback / data_dir 来自 .deps，
+# _log_task_exception / _create_background_task / _sync_episode_modules 来自
+# .services.background_tasks，均已通过顶部 import 引入。
 
 # ==================== 数据传输对象 ====================
 
@@ -1578,75 +1529,8 @@ async def apply_glossary_to_episode(episode_id: str) -> CorrectTranscriptRespons
     )
 
 
-async def _sync_episode_modules(episode_id: str, updated_segments: list, regenerate_paragraphs=True):
-    """
-    同步字幕更改到所有模块（后台任务）
-
-    Args:
-        episode_id: 节目ID
-        updated_segments: 更新后的segments
-        regenerate_paragraphs: 是否重新生成paragraph_mappings（默认True，词库纠错时应为False）
-
-    目前仅同步 paragraph_mappings。outline / summaries / highlight 的重生成依赖 LLM，
-    调用方应显式触发对应接口；此处不做隐式重建。
-    """
-    if not updated_segments:
-        return
-
-    try:
-        if regenerate_paragraphs:
-            episode = await EpisodeRepository.get_by_id(episode_id)
-            if not episode:
-                logger.warning(f"[Sync Modules] episode not found: {episode_id}")
-                return
-
-            title = episode.get("title") or "Unknown"
-            language = episode.get("language") or "zh"
-
-            from .services.llm_semantic_segmenter import split_into_semantic_segments
-
-            paragraph_mappings = await split_into_semantic_segments(
-                segments=updated_segments,
-                title=title,
-                language=language,
-                batch_size=800,
-                progress_cb=None,
-            )
-
-            if paragraph_mappings:
-                await EpisodeRepository.update(
-                    episode_id,
-                    paragraph_mappings=paragraph_mappings,
-                )
-                logger.info(
-                    f"[Sync Modules] updated paragraph_mappings for {episode_id}: "
-                    f"{len(paragraph_mappings)} paragraphs"
-                )
-
-    except Exception as exc:
-        # 后台任务失败时：
-        # 1. ERROR 级别日志（带 episode_id），便于在日志聚合里被告警捕获；
-        # 2. 写一份 sync_status.json 到 episode 数据目录，让排查 / 后续前端
-        #    轮询能读到失败原因，而不是无声地"一直没有 paragraph_mappings"。
-        import json as _json
-        logger.error(
-            f"[Sync Modules] failed episode_id=%s error=%s: %s",
-            episode_id, type(exc).__name__, exc,
-            exc_info=exc,
-            extra={"episode_id": episode_id, "error_type": type(exc).__name__},
-        )
-        try:
-            status_file = data_dir / "media" / episode_id / "sync_status.json"
-            status_file.parent.mkdir(parents=True, exist_ok=True)
-            status_file.write_text(_json.dumps({
-                "status": "failed",
-                "error_type": type(exc).__name__,
-                "error": str(exc),
-                "failed_at": datetime.now().isoformat(),
-            }, ensure_ascii=False), encoding="utf-8")
-        except Exception:
-            # 写状态文件本身失败不能再吞掉主流程，仅 debug 级日志
-            logger.debug("Could not write sync_status.json", exc_info=True)
+# _sync_episode_modules / _create_background_task / _log_task_exception
+# 已迁移到 .services.background_tasks，通过顶部 import 引入到本模块命名空间。
 
 
 # ==================== 辅助函数 ====================
