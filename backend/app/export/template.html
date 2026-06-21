@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Podcast Summary</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --bg-primary: #ffffff;
+            --bg-secondary: #f8f9fa;
+            --bg-tertiary: #e9ecef;
+            --text-primary: #212529;
+            --text-secondary: #6c757d;
+            --accent: #2563eb;
+            --accent-light: #dbeafe;
+            --border: #dee2e6;
+            --success: #22c55e;
+            --warning: #f59e0b;
+        }
+
+        [data-theme="dark"] {
+            --bg-primary: #1a1a1a;
+            --bg-secondary: #2d2d2d;
+            --bg-tertiary: #3d3d3d;
+            --text-primary: #e5e5e5;
+            --text-secondary: #a3a3a3;
+            --accent: #3b82f6;
+            --accent-light: #1e3a5f;
+            --border: #404040;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            line-height: 1.6;
+            padding: 20px;
+        }
+
+        .summary-card {
+            max-width: 1080px;
+            margin: 0 auto;
+            background: var(--bg-primary);
+        }
+
+        .card-header {
+            padding: 40px 0 30px;
+            border-bottom: 2px solid var(--border);
+            margin-bottom: 30px;
+        }
+
+        .brand {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            margin-bottom: 20px;
+        }
+
+        .title {
+            font-size: 42px;
+            font-weight: 700;
+            color: var(--text-primary);
+            margin-bottom: 12px;
+            line-height: 1.2;
+        }
+
+        .subtitle {
+            font-size: 24px;
+            color: var(--text-secondary);
+            font-weight: 400;
+        }
+
+        .tldr {
+            background: var(--bg-secondary);
+            padding: 30px;
+            border-radius: 16px;
+            margin-bottom: 30px;
+        }
+
+        .tldr h2 {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 16px;
+            color: var(--text-primary);
+        }
+
+        .tldr p {
+            font-size: 16px;
+            line-height: 1.8;
+            color: var(--text-secondary);
+            margin-bottom: 20px;
+        }
+
+        .verdict {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+
+        .badge {
+            padding: 6px 16px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .badge-deep { background: #dcfce7; color: #166534; }
+        .badge-skim { background: #fef3c7; color: #92400e; }
+        .badge-skip { background: #fee2e2; color: #991b1b; }
+
+        .audience {
+            font-size: 14px;
+            color: var(--text-secondary);
+            padding: 6px 12px;
+            background: var(--bg-tertiary);
+            border-radius: 8px;
+        }
+
+        .section {
+            margin-bottom: 40px;
+        }
+
+        .section h2 {
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 24px;
+            color: var(--text-primary);
+        }
+
+        .chapter-list {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .chapter {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            padding: 16px;
+            background: var(--bg-secondary);
+            border-radius: 12px;
+            transition: transform 0.2s;
+        }
+
+        .time {
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 14px;
+            color: var(--text-secondary);
+            min-width: 120px;
+        }
+
+        .chapter .title {
+            font-size: 16px;
+            font-weight: 500;
+            margin: 0;
+        }
+
+        .chapter-summary {
+            margin-bottom: 30px;
+            padding: 24px;
+            background: var(--bg-secondary);
+            border-radius: 16px;
+        }
+
+        .chapter-summary h3 {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 12px;
+            color: var(--text-primary);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        .chapter-summary h3 .time {
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--accent);
+            background: var(--accent-light);
+            padding: 4px 12px;
+            border-radius: 8px;
+            font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+            white-space: nowrap;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            flex-shrink: 0;
+        }
+
+        .chapter-summary h3 .time::before {
+            content: '⏱';
+            font-size: 11px;
+            opacity: 0.8;
+        }
+
+        .chapter-summary p {
+            font-size: 15px;
+            line-height: 1.7;
+            color: var(--text-secondary);
+            margin-bottom: 16px;
+        }
+
+        .key-points {
+            list-style: none;
+        }
+
+        .key-points li {
+            position: relative;
+            padding-left: 24px;
+            margin-bottom: 8px;
+            font-size: 14px;
+            color: var(--text-secondary);
+        }
+
+        .key-points li:before {
+            content: "•";
+            position: absolute;
+            left: 0;
+            color: var(--accent);
+            font-weight: 700;
+        }
+
+        .highlights {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .highlight-card {
+            padding: 24px;
+            background: var(--bg-secondary);
+            border-radius: 16px;
+            border-left: 4px solid var(--accent);
+        }
+
+        .kind {
+            display: inline-block;
+            font-size: 12px;
+            font-weight: 600;
+            padding: 4px 12px;
+            background: var(--accent-light);
+            color: var(--accent);
+            border-radius: 12px;
+            margin-bottom: 12px;
+        }
+
+        .highlight-card .text {
+            font-size: 16px;
+            font-weight: 500;
+            line-height: 1.6;
+            color: var(--text-primary);
+            margin-bottom: 8px;
+        }
+
+        .highlight-card .why {
+            font-size: 14px;
+            color: var(--text-secondary);
+            font-style: italic;
+        }
+
+        .card-footer {
+            margin-top: 60px;
+            padding: 30px 0;
+            border-top: 2px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 14px;
+            color: var(--text-secondary);
+        }
+
+        @media (max-width: 768px) {
+            body {
+                padding: 16px;
+            }
+
+            .title {
+                font-size: 32px;
+            }
+
+            .subtitle {
+                font-size: 20px;
+            }
+
+            .section h2 {
+                font-size: 24px;
+            }
+        }
+    </style>
+</head>
+<body data-theme="{{ theme }}">
+    <div class="summary-card">
+        <header class="card-header">
+            <div class="brand">Podcast Digester</div>
+            <h1 class="title">{{ title }}</h1>
+            <p class="subtitle">{{ title_zh }}</p>
+        </header>
+
+        {% if tldr_zh %}
+        <section class="tldr">
+            <h2>摘要</h2>
+            <p>{{ tldr_zh }}</p>
+            {% if verdict %}
+            <div class="verdict">
+                <span class="badge badge-{{ verdict }}">
+                    {{ verdict_label }}
+                </span>
+                {% if target_audience_zh %}
+                <span class="audience">{{ target_audience_zh }}</span>
+                {% endif %}
+            </div>
+            {% endif %}
+        </section>
+        {% endif %}
+
+        {% if highlights %}
+        <section class="section">
+            <h2>洞察金句</h2>
+            <div class="highlights">
+                {% for highlight in highlights %}
+                <div class="highlight-card">
+                  <div class="highlight-header">
+                    <span class="kind">{{ highlight.kind_label }}</span>
+                    {% if highlight.start_time %}
+                    <span class="time">⏱ {{ highlight.start_time }}</span>
+                    {% endif %}
+                  </div>
+                  <p class="text">{{ highlight.text_zh }}</p>
+                  <p class="why">{{ highlight.why_zh }}</p>
+                </div>
+                {% endfor %}
+            </div>
+        </section>
+        {% endif %}
+
+        {% if summaries %}
+        <section class="section">
+            <h2>章节摘要</h2>
+            {% for summary in summaries %}
+            <div class="chapter-summary">
+                <h3>
+                    {{ summary.title_zh }}
+                    {% if summary.time_range %}
+                    <span class="time">{{ summary.time_range }}</span>
+                    {% endif %}
+                </h3>
+                <p>{{ summary.content_zh }}</p>
+                {% if summary.key_points_zh %}
+                <ul class="key-points">
+                    {% for point in summary.key_points_zh %}
+                    <li>{{ point }}</li>
+                    {% endfor %}
+                </ul>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </section>
+        {% endif %}
+
+        <footer class="card-footer">
+            <span>Generated by Podcast Digester</span>
+            {% if date %}
+            <span>{{ date }}</span>
+            {% endif %}
+        </footer>
+    </div>
+</body>
+</html>

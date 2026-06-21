@@ -1,0 +1,109 @@
+# ============================================
+# Podcast Digester .gitignore
+# ============================================
+
+# ---------- Secrets & env (NEVER commit) ----------
+.env
+.env.local
+.env.*.local
+backend/.env
+**/.env
+!.env.example
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual envs
+venv/
+.venv/
+env/
+ENV/
+backend/venv/
+backend/.venv/
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+backend/htmlcov/
+backend/.pytest_cache/
+
+# ---------- Node / Frontend ----------
+node_modules/
+frontend/node_modules/
+dist/
+frontend/dist/
+.vite/
+*.local
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ---------- IDE / Editor ----------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.sublime-project
+*.sublime-workspace
+
+# ---------- Project runtime artifacts ----------
+# 数据目录下的运行时数据（媒体、导出、DB、cookies），保留目录结构但不跟踪内容
+data/media/
+data/exports/
+data/cookies/
+data/*.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+
+# PID 文件
+.backend_pid
+.frontend_pid
+*.pid
+
+# 测试 fixtures 中可能生成的大文件
+*.mp3
+*.m4a
+*.wav
+*.mp4
+*.vtt
+
+# Apple AFM ASR 缓存
+backend/app/speech_analyzer_bridge/.build/
+backend/app/speech_analyzer_bridge/.swiftpm/
+
+# Plans / 临时输出（保留 docs/）
+*.tmp
+*.bak

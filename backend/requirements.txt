@@ -1,0 +1,36 @@
+# Backend Requirements
+# Python 3.11+
+
+# FastAPI and server
+fastapi==0.115.0
+uvicorn[standard]==0.30.0
+pydantic==2.8.0
+pydantic-settings==2.5.0
+
+# Database
+aiosqlite==0.20.0
+
+# LLM
+openai==1.51.0
+
+# ASR
+faster-whisper==1.0.3
+
+# yt-dlp for media download
+yt-dlp==2025.1.26
+
+# Playwright for CDP bypass (optional, for anti-scraping)
+playwright==1.49.0
+
+# Utilities
+python-multipart==0.0.17
+jinja2==3.1.4
+
+# Optional: curl_cffi for Douyin anti-scraping
+curl-cffi==0.7.1
+
+# Testing
+pytest==8.3.0
+pytest-asyncio==0.24.0
+pytest-cov==6.0.0
+pytest-mock==3.14.0
