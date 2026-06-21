@@ -663,58 +663,15 @@ const toggleChapter = (index) => {
   expandedChapter.value = expandedChapter.value === index ? -1 : index
 }
 
-const formatTime = (ms) => {
-  if (!ms && ms !== 0) return '--:--'
-  const s = Math.floor(ms / 1000)
-  const m = Math.floor(s / 60)
-  const sec = s % 60
-  return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`
-}
-
-// 格式化时间范围：显示段落开始和结束时间
-const formatTimeRange = (startMs, endMs) => {
-  if (!startMs && startMs !== 0) return '--:--'
-  if (!endMs && endMs !== 0) return formatTime(startMs)
-  return `${formatTime(startMs)} - ${formatTime(endMs)}`
-}
-
-const formatDuration = (segments) => {
-  if (!segments?.length) return '0 min'
-  const totalMs = segments[segments.length - 1]?.end_ms || 0
-  const min = Math.floor(totalMs / 60000)
-  return `${min} min`
-}
-
-const verdictText = (verdict) => {
-  const texts = {
-    deep_listen: '🎧 深度聆听',
-    skim_outline: '👄 略读大纲',
-    skip: '⏭️ 可跳过'
-  }
-  return texts[verdict] || verdict
-}
-
-const getHighlightKind = (kind) => {
-  const kinds = {
-    quote: '💬',
-    insight: '💡',
-    fact: '📊',
-    contrarian: '🔥',
-    story: '📖'
-  }
-  return kinds[kind] || '💡'
-}
-
-const getHighlightKindLabel = (kind) => {
-  const labels = {
-    quote: '金句',
-    insight: '洞察',
-    fact: '数据',
-    contrarian: '反常识',
-    story: '故事'
-  }
-  return labels[kind] || kind
-}
+// 格式化 / 亮点展示助手：从 utils/formatters 引入，避免在视图层堆纯函数。
+import {
+  formatTime,
+  formatTimeRange,
+  formatDuration,
+  verdictText,
+  getHighlightKind,
+  getHighlightKindLabel,
+} from '@/utils/formatters'
 
 // 按类型分组亮点
 const highlightsByKind = computed(() => {
