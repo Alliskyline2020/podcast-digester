@@ -705,31 +705,14 @@ const navigateChapter = (direction) => {
   }
 }
 
-const handleKeyboard = (e) => {
-  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return
-  switch (e.key) {
-    case ' ':
-      e.preventDefault()
-      togglePlay()
-      break
-    case 'ArrowLeft':
-      e.preventDefault()
-      seekRelative(-5)
-      break
-    case 'ArrowRight':
-      e.preventDefault()
-      seekRelative(5)
-      break
-    case 'j':
-      e.preventDefault()
-      navigateChapter(-1)
-      break
-    case 'k':
-      e.preventDefault()
-      navigateChapter(1)
-      break
-  }
-}
+// 键盘快捷键：注册/卸载由 useKeyboardShortcuts 在 onMounted/onUnmounted 自动管理。
+// 历史上这里有一段 25 行的 handleKeyboard 函数和两处 add/removeEventListener。
+import { useKeyboardShortcuts } from '@/composables/useKeyboardShortcuts'
+useKeyboardShortcuts({
+  onSpace: () => togglePlay(),
+  onSeek: (deltaSec) => seekRelative(deltaSec),
+  onChapter: (direction) => navigateChapter(direction),
+})
 
 const localSeekTo = (ms) => {
   console.log('[localSeekTo] Called with ms:', ms)
@@ -882,7 +865,7 @@ const timeWatcher = watchTime(currentTime, (newIndex, didScroll) => {
 
 onMounted(() => {
   loadEpisode()
-  window.addEventListener('keydown', handleKeyboard)
+  // keydown 监听由 useKeyboardShortcuts 在自己的 onMounted 里注册
 
   // 确保音频元素准备就绪后再设置全局引用
   nextTick(() => {
@@ -896,7 +879,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
-  window.removeEventListener('keydown', handleKeyboard)
+  // keydown 监听由 useKeyboardShortcuts 在自己的 onUnmounted 里卸载
 
   // Cleanup scroll composable to prevent memory leaks
   if (cleanupScroll) {
