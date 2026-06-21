@@ -43,6 +43,7 @@ from .services.background_tasks import (
     create_background_task as _create_background_task,
     sync_episode_modules as _sync_episode_modules,
 )
+from .routers import glossary as glossary_router
 
 # 初始化logger
 logger = logging.getLogger(__name__)
@@ -121,15 +122,7 @@ class UpdateSegmentResponse(BaseModel):
     added_to_glossary: bool
 
 
-class GlossaryEntry(BaseModel):
-    """词库条目"""
-    correct: str
-    wrong: list[str]
-
-
-class GlossaryResponse(BaseModel):
-    """词库响应"""
-    entries: dict[str, list[str]]
+# GlossaryEntry / GlossaryResponse 已迁移到 routers/glossary.py
 
 
 # ==================== 应用初始化 ====================
@@ -301,6 +294,11 @@ app.mount("/media", StaticFiles(directory=str(data_dir / "media")), name="media"
 fixtures_dir = data_dir / "fixtures"
 if fixtures_dir.exists():
     app.mount("/fixtures", StaticFiles(directory=str(fixtures_dir)), name="fixtures")
+
+
+# ==================== Routers ====================
+# 各业务 router 在 routers/<name>.py 中定义，main.py 仅负责装载。
+app.include_router(glossary_router.router)
 
 
 # ==================== 全局异常处理器 ====================
@@ -1429,45 +1427,7 @@ async def update_transcript_segment(
     )
 
 
-@app.post("/api/glossary/entries", response_model=GlossaryResponse)
-async def get_glossary_entries() -> GlossaryResponse:
-    """获取词库所有条目"""
-    from .services.glossary import get_glossary
-
-    glossary = get_glossary(data_dir)
-    return GlossaryResponse(entries=glossary.get_all_entries())
-
-
-@app.post("/api/glossary/add")
-async def add_glossary_entry(entry: GlossaryEntry):
-    """
-    添加词库条目
-
-    Args:
-        entry: 词库条目
-    """
-    from .services.glossary import get_glossary
-
-    glossary = get_glossary(data_dir)
-    glossary.add_entry(entry.correct, entry.wrong)
-
-    return {"success": True, "message": "词库条目已添加"}
-
-
-@app.delete("/api/glossary/entries/{correct}")
-async def delete_glossary_entry(correct: str):
-    """
-    删除词库条目
-
-    Args:
-        correct: 正确的词汇
-    """
-    from .services.glossary import get_glossary
-
-    glossary = get_glossary(data_dir)
-    glossary.remove_entry(correct)
-
-    return {"success": True, "message": "词库条目已删除"}
+# 3 个纯词库 CRUD 端点已迁移到 routers/glossary.py
 
 
 @app.post("/api/episodes/{episode_id}/apply-glossary", response_model=CorrectTranscriptResponse)
