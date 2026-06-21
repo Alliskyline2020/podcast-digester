@@ -41,7 +41,10 @@ async def get_glossary_entries() -> GlossaryResponse:
     from ..services.glossary import get_glossary
 
     glossary = get_glossary(deps.data_dir)
-    return GlossaryResponse(entries=glossary.get_all_entries())
+    # GlossaryDB 实例的访问器叫 get_entries() 且是 async；不要和
+    # services/glossary.py 里未使用的 sync Glossary.get_all_entries() 混淆。
+    entries = await glossary.get_entries()
+    return GlossaryResponse(entries=entries)
 
 
 @router.post("/api/glossary/add")
