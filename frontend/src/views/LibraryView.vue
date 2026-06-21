@@ -168,12 +168,25 @@
             v-model="resumeInput"
             placeholder="粘贴原始播客链接或文件路径..."
             class="dialog-input"
+            :class="{ 'dialog-input-error': resumeError }"
+            :aria-invalid="!!resumeError"
+            :aria-describedby="resumeError ? 'resume-error' : undefined"
             @keyup.enter="executeResume"
+            @input="resumeError = ''"
           />
+          <p v-if="resumeError" id="resume-error" class="dialog-error" role="alert">
+            {{ resumeError }}
+          </p>
         </div>
         <div class="dialog-actions">
           <button @click="cancelResume" class="dialog-btn dialog-btn-cancel">取消</button>
-          <button @click="executeResume" :disabled="!resumeInput.trim()" class="dialog-btn dialog-btn-confirm">恢复</button>
+          <button
+            @click="executeResume"
+            :disabled="!resumeInput.trim() || resumeInProgress"
+            class="dialog-btn dialog-btn-confirm"
+          >
+            {{ resumeInProgress ? '恢复中...' : '恢复' }}
+          </button>
         </div>
       </div>
     </div>
@@ -185,6 +198,7 @@
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import * as api from '@/api'
+import { validatePodcastInput } from '@/utils/validation'
 
 const router = useRouter()
 
@@ -244,6 +258,8 @@ const episodeToCancel = ref(null)
 const showResumeDialog = ref(false)
 const episodeToResume = ref(null)
 const resumeInput = ref('')
+const resumeError = ref('')
+const resumeInProgress = ref(false)
 
 // 状态文本映射
 const statusText = (status) => {
@@ -299,14 +315,21 @@ const formatTime = (dateStr) => {
 }
 
 const handlePaste = async () => {
-  const text = inputText.value.trim()
-  if (!text) return
+  // 客户端校验：避免把明显错误的输入打到后端
+  const { ok, error: validationError, normalized } = validatePodcastInput(inputText.value)
+  if (!ok) {
+    error.value = validationError
+    return
+  }
+
+  // 防止用户在请求 in-flight 时再次点 "添加"
+  if (isPasting.value) return
 
   isPasting.value = true
   error.value = ''
 
   try {
-    const episode = await api.pasteEpisode(text)
+    const episode = await api.pasteEpisode(normalized)
     episodes.value.unshift(episode)
     inputText.value = ''
   } catch (e) {
@@ -378,18 +401,29 @@ const cancelResume = () => {
   showResumeDialog.value = false
   episodeToResume.value = null
   resumeInput.value = ''
+  resumeError.value = ''
 }
 
 const executeResume = async () => {
-  if (!episodeToResume.value || !resumeInput.value.trim()) return
+  if (!episodeToResume.value) return
 
+  const { ok, error: validationError, normalized } = validatePodcastInput(resumeInput.value)
+  if (!ok) {
+    // 用 inline error 替代 alert()，避免阻塞 + 不可测
+    resumeError.value = validationError
+    return
+  }
+
+  resumeError.value = ''
+  resumeInProgress.value = true
   try {
-    await api.resumeEpisode(episodeToResume.value.id, resumeInput.value.trim())
-    // 恢复成功后刷新列表
+    await api.resumeEpisode(episodeToResume.value.id, normalized)
     await loadEpisodes()
     cancelResume()
   } catch (e) {
-    alert('恢复失败: ' + e.message)
+    resumeError.value = e.message || '恢复失败'
+  } finally {
+    resumeInProgress.value = false
   }
 }
 
@@ -975,5 +1009,21 @@ onUnmounted(() => {
   outline: none;
   border-color: #4f8ef7;
   box-shadow: 0 0 0 3px rgba(79, 142, 247, 0.1);
+}
+
+.dialog-input-error {
+  border-color: #ef4444;
+}
+
+.dialog-input-error:focus {
+  border-color: #ef4444;
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.1);
+}
+
+.dialog-error {
+  margin: 6px 0 0;
+  color: #dc2626;
+  font-size: 13px;
+  line-height: 1.4;
 }
 </style>
