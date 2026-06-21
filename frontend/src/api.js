@@ -127,6 +127,16 @@ export function getFixtureUrl(fixtureId) {
 }
 
 /**
+ * 加载演示 fixture 节目。
+ * 占位实现：后端尚无对应端点（POST /api/fixtures/load 或类似），
+ * UI 中的 "试用演示数据" 按钮调用本函数时会得到明确错误而不是
+ * 静默崩溃。等后端补齐 fixture-seeding 端点后再实现真实逻辑。
+ */
+export async function loadFixtureEpisode() {
+  throw new Error('loadFixtureEpisode 尚未实现：等待后端 fixture-seeding 端点')
+}
+
+/**
  * 导出节目摘要
  * @param {string} episodeId - 节目ID
  * @param {string} format - 'html' 或 'png'
