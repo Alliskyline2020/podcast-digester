@@ -13,7 +13,7 @@ import logging
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from ..deps import data_dir
+from .. import deps
 
 
 router = APIRouter()
@@ -40,7 +40,7 @@ async def get_glossary_entries() -> GlossaryResponse:
     """获取词库所有条目"""
     from ..services.glossary import get_glossary
 
-    glossary = get_glossary(data_dir)
+    glossary = get_glossary(deps.data_dir)
     return GlossaryResponse(entries=glossary.get_all_entries())
 
 
@@ -54,7 +54,7 @@ async def add_glossary_entry(entry: GlossaryEntry):
     """
     from ..services.glossary import get_glossary
 
-    glossary = get_glossary(data_dir)
+    glossary = get_glossary(deps.data_dir)
     glossary.add_entry(entry.correct, entry.wrong)
 
     return {"success": True, "message": "词库条目已添加"}
@@ -70,7 +70,7 @@ async def delete_glossary_entry(correct: str):
     """
     from ..services.glossary import get_glossary
 
-    glossary = get_glossary(data_dir)
+    glossary = get_glossary(deps.data_dir)
     glossary.remove_entry(correct)
 
     return {"success": True, "message": "词库条目已删除"}

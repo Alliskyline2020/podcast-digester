@@ -10,7 +10,7 @@ from typing import Optional, Tuple
 
 from fastapi import APIRouter, HTTPException, Request, Response
 
-from ..deps import data_dir
+from .. import deps
 
 
 router = APIRouter()
@@ -135,7 +135,7 @@ async def serve_audio_file(episode_id: str, request: Request) -> Response:
     支持格式: m4a, mp3, mp4, webm, opus, wav
     浏览器使用 Range 请求进行音频 seek
     """
-    media_dir = data_dir / "media" / episode_id
+    media_dir = deps.data_dir / "media" / episode_id
 
     # 尝试不同的音频格式
     audio_file = None

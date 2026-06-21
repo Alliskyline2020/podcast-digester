@@ -53,16 +53,22 @@ def temp_data_dir():
     import shutil
     temp_dir = Path(tempfile.mkdtemp())
 
-    # 临时替换 data_dir
+    # 临时替换 data_dir。需要同时替换 main 和 deps 里的引用：
+    # main.py 历史上引用 data_dir（现已迁移到 deps，但 main 仍 import 别名），
+    # routers 直接 from ..deps import data_dir，所以必须替换 deps 模块的属性。
     import app.main
-    original_data_dir = app.main.data_dir
+    import app.deps
+    original_main = app.main.data_dir
+    original_deps = app.deps.data_dir
     app.main.data_dir = temp_dir
+    app.deps.data_dir = temp_dir
 
     yield temp_dir
 
     # 清理
     shutil.rmtree(temp_dir, ignore_errors=True)
-    app.main.data_dir = original_data_dir
+    app.main.data_dir = original_main
+    app.deps.data_dir = original_deps
 
 
 @pytest.fixture(autouse=True)
