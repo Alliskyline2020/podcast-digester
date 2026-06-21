@@ -519,8 +519,22 @@ class AudioProcessPipeline:
             logger.info(f"[Punctuation] 完成 {episode_id} 标点添加")
 
         except Exception as e:
-            logger.error(f"[Punctuation] 处理失败: {e}")
-            # 标点添加失败不影响主流程，继续使用原字幕
+            logger.error(f"[Punctuation] 处理失败: {e}", exc_info=True)
+            # 标点添加失败不影响主流程，继续使用原字幕；
+            # 但写一份状态文件让前端能在字幕页提示"标点未生成"，避免用户
+            # 以为是 bug。
+            try:
+                import json as _json
+                status_file = self.data_dir / "media" / episode_id / "punctuation_status.json"
+                status_file.parent.mkdir(parents=True, exist_ok=True)
+                status_file.write_text(_json.dumps({
+                    "status": "failed",
+                    "error_type": type(e).__name__,
+                    "error": str(e),
+                    "failed_at": datetime.now().isoformat(),
+                }, ensure_ascii=False), encoding="utf-8")
+            except Exception:
+                logger.debug("Could not write punctuation_status.json", exc_info=True)
 
     async def cancel(self, episode_id: str) -> bool:
         """取消正在进行的任务"""

@@ -370,6 +370,15 @@ async def load_episode_bundle(episode_id: str) -> EpisodeBundle:
                 updated_at=datetime.fromisoformat(job_data["updated_at"]),
             )
 
+    # 加载非致命失败状态文件（标点恢复等），让前端能展示"为何字幕没有标点"。
+    punctuation_status = None
+    punctuation_status_file = deps.data_dir / "media" / episode_id / "punctuation_status.json"
+    if punctuation_status_file.exists():
+        try:
+            punctuation_status = json.loads(punctuation_status_file.read_text(encoding="utf-8"))
+        except Exception as e:
+            logger.debug(f"[Load Bundle] punctuation_status.json unreadable: {e}")
+
     return EpisodeBundle(
         episode=episode,
         transcript=transcript,
@@ -378,4 +387,5 @@ async def load_episode_bundle(episode_id: str) -> EpisodeBundle:
         highlight=highlight,
         ingest_job=ingest_job,
         product_insights=product_insights,
+        punctuation_status=punctuation_status,
     )

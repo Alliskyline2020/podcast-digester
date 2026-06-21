@@ -176,6 +176,18 @@
 
         <!-- Tab 2: 转录字幕 -->
         <div v-show="activeTab === 'transcript'" class="tab-content transcript-tab" role="tabpanel" id="tabpanel-transcript" aria-labelledby="tab-transcript">
+          <!-- 标点恢复失败的提示：避免用户以为"字幕没标点"是 bug -->
+          <div
+            v-if="bundle?.episode?.punctuation_status?.status === 'failed'"
+            class="punct-warning"
+            role="alert"
+          >
+            <span class="punct-warning-icon">⚠️</span>
+            <span class="punct-warning-text">
+              字幕标点自动恢复失败（{{ bundle.episode.punctuation_status.error_type }}），
+              当前为原始 ASR 文本。可尝试使用"术语纠错"或"LLM 纠正"功能补救。
+            </span>
+          </div>
           <div class="transcript-header">
             <div class="subtitle-info">
               <span class="subtitle-count">{{ formatTime(segments[segments.length - 1]?.end_ms || 0) }}</span>
@@ -1436,6 +1448,28 @@ onUnmounted(() => {
 }
 
 /* 转录字幕 Tab */
+.punct-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid #fbbf24;
+  background: rgba(251, 191, 36, 0.08);
+  border-radius: 8px;
+  color: #92400e;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.punct-warning-icon {
+  flex-shrink: 0;
+}
+
+.punct-warning-text {
+  flex: 1;
+}
+
 .transcript-header {
   display: flex;
   align-items: center;

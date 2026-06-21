@@ -273,6 +273,8 @@ class EpisodeBundle(BaseModel):
     launch_analysis: Optional[LaunchAnalysis] = Field(None, description="发布会分析")
     podcast_analysis: Optional[PodcastAnalysis] = Field(None, description="播客分析")
     product_insights: Optional[ProductInsights] = Field(None, description="产品和技术洞察")
+    # 处理过程中的非致命失败状态（供前端提示用户）
+    punctuation_status: Optional[dict] = Field(None, description="标点恢复状态（失败时含 error/error_type/failed_at）")
 
 
 # ==================== 请求/响应模型 ====================
