@@ -55,6 +55,44 @@
       <div v-if="error" id="paste-error" class="error-message" role="alert" aria-live="polite">{{ error }}</div>
     </div>
 
+    <!-- 节目状态转换通知（处理中 → 完成/失败）。
+         避免用户在 'processing' 过滤下节目消失后误以为数据丢了。 -->
+    <div
+      v-if="recentTransitions.length > 0"
+      class="transitions-toast"
+      role="status"
+      aria-live="polite"
+    >
+      <div
+        v-for="t in recentTransitions"
+        :key="t.id"
+        class="transition-item"
+        :class="`transition-${t.status}`"
+      >
+        <span class="transition-icon" aria-hidden="true">
+          {{ t.status === 'ready' ? '✓' : '⚠️' }}
+        </span>
+        <span class="transition-text">
+          节目「{{ (t.title || '').slice(0, 30) }}{{ (t.title || '').length > 30 ? '...' : '' }}」
+          {{ t.status === 'ready' ? '处理完成' : '处理失败' }}
+        </span>
+        <button
+          v-if="t.status === 'ready'"
+          @click="openEpisode(t.id)"
+          class="transition-action"
+        >
+          查看
+        </button>
+        <button
+          @click="dismissTransition(t.id)"
+          class="transition-dismiss"
+          aria-label="关闭通知"
+        >
+          ✕
+        </button>
+      </div>
+    </div>
+
     <!-- 节目列表 -->
     <div class="episodes-list">
       <div v-for="ep in filteredEpisodes" :key="ep.id" class="episode-card" @click="openEpisode(ep.id)">
@@ -237,6 +275,9 @@ const inputText = ref('')
 const episodes = ref([])
 // 首次加载标志：为 true 时显示加载态，避免在数据到达前误显示"暂无节目"
 const isLoading = ref(true)
+// 节目从 processing → ready/failed 的转换通知。
+// 用于解决"在处理中过滤下节目完成后消失看起来像数据丢失"的 UX 问题。
+const recentTransitions = ref([])
 const isPasting = ref(false)
 const error = ref('')
 let pollInterval = null
@@ -463,13 +504,45 @@ const executeResume = async () => {
 const loadEpisodes = async () => {
   try {
     const data = await api.listEpisodes()
-    episodes.value = data.episodes || []
+    const incoming = data.episodes || []
+
+    // 检测状态转换：之前是 processing，现在是 ready/failed。
+    // 用户可能在 'processing' 过滤下，节目一变 ready 就从列表消失，
+    // 看起来像数据丢了。这里捕获转换并弹出可点击提示，引导用户切换过滤。
+    const prevById = new Map(episodes.value.map((e) => [e.id, e.status]))
+    const PROCESSING_STATES = ['pending', 'downloading', 'asr_running', 'llm_running']
+    for (const ep of incoming) {
+      const prev = prevById.get(ep.id)
+      if (prev && PROCESSING_STATES.includes(prev) && ep.status !== prev) {
+        // 状态发生转换：processing → ready/failed
+        recentTransitions.value.unshift({
+          id: ep.id,
+          title: ep.title,
+          status: ep.status,
+          at: Date.now(),
+        })
+        // 只保留最近 5 条，避免无限增长
+        recentTransitions.value = recentTransitions.value.slice(0, 5)
+      }
+    }
+
+    episodes.value = incoming
   } catch (e) {
     console.error('加载节目列表失败:', e)
   } finally {
     // 首次加载完成后才允许展示空状态，避免误闪
     isLoading.value = false
   }
+}
+
+// 清掉超过 60s 的 transition toast
+function pruneRecentTransitions() {
+  const cutoff = Date.now() - 60_000
+  recentTransitions.value = recentTransitions.value.filter((t) => t.at > cutoff)
+}
+
+function dismissTransition(id) {
+  recentTransitions.value = recentTransitions.value.filter((t) => t.id !== id)
 }
 
 // 搜索处理（防抖）
@@ -523,12 +596,17 @@ const startPolling = () => {
   }, 1500) // 提高轮询频率到 1.5 秒
 }
 
+// 定期清理过期的 transition toast
+let transitionPruneInterval = null
+
 onMounted(() => {
   startPolling()
+  transitionPruneInterval = setInterval(pruneRecentTransitions, 10_000)
 })
 
 onUnmounted(() => {
   if (pollInterval) clearInterval(pollInterval)
+  if (transitionPruneInterval) clearInterval(transitionPruneInterval)
 })
 </script>
 
@@ -612,6 +690,94 @@ onUnmounted(() => {
 .no-results {
   text-align: center;
   padding: 40px 20px;
+}
+
+/* 节目状态转换 toast */
+.transitions-toast {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.transition-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  border: 1px solid;
+  animation: transition-slide-in 0.25s ease-out;
+}
+
+.transition-ready {
+  background: #ecfdf5;
+  border-color: #6ee7b7;
+  color: #065f46;
+}
+
+.transition-failed {
+  background: #fef2f2;
+  border-color: #fca5a5;
+  color: #991b1b;
+}
+
+.transition-icon {
+  flex-shrink: 0;
+  font-weight: 700;
+}
+
+.transition-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.transition-action {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  border: none;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.6);
+  color: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.transition-action:hover {
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.transition-dismiss {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  opacity: 0.6;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.transition-dismiss:hover {
+  opacity: 1;
+}
+
+@keyframes transition-slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .paste-section {
