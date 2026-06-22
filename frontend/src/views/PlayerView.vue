@@ -433,106 +433,31 @@ const {
   onLoadedMetadata
 } = usePlayer()
 
-// 音频加载状态
-const audioReady = ref(false)
-const pendingSeek = ref(null)
-
-// 音频准备好后的处理
-const onCanPlay = (event) => {
-  // 防止重复触发（当 seek 时可能会触发 canplay）
-  if (event && event.type === 'canplay' && audioReady.value && audioRef.value && audioRef.value.currentTime > 1) {
-    console.log('[PlayerView] canplay event fired but audio already ready and has content, ignoring')
-    return
-  }
-
-  console.log('[PlayerView] Audio canplay event fired')
-  audioReady.value = true
-
-  // 如果有待处理的跳转，执行它
-  if (pendingSeek.value !== null) {
-    console.log('[PlayerView] Executing pending seek to', pendingSeek.value)
-    const ms = pendingSeek.value
-    pendingSeek.value = null
-
-    // 使用 setTimeout 确保在事件循环下一帧执行，避免事件冲突
-    setTimeout(() => {
-      if (audioRef.value && audioReady.value) {
-        executeSeek(ms)
-      }
-    }, 0)
-  }
-}
-
-const onLoadedData = () => {
-  console.log('[PlayerView] Audio loadeddata event fired')
-  audioReady.value = true
-}
-
-const onCanPlayThrough = () => {
-  console.log('[PlayerView] Audio canplaythrough event fired')
-  audioReady.value = true
-}
-
-const onAudioSeeking = () => {
-  console.log('[PlayerView] Audio seeking event fired')
-}
-
-const onAudioSeeked = () => {
-  console.log('[PlayerView] Audio seeked event fired, currentTime is now', audioRef.value?.currentTime)
-
-  // Reset seeking flag and process queue
-  isSeeking.value = false
-
-  // Process queued seeks if any
-  if (seekQueue.value.length > 0) {
-    const nextSeek = seekQueue.value.shift()
-    console.log('[PlayerView] Processing queued seek:', nextSeek)
-    setTimeout(() => {
-      if (audioRef.value && audioReady.value) {
-        executeSeek(nextSeek)
-      }
-    }, 50)
-  }
-}
-
-// 实际执行跳转的函数
-const executeSeek = (ms) => {
-  if (!audioRef.value) return
-
-  const audio = audioRef.value
-  const targetTime = ms / 1000
-  console.log('[executeSeek] Setting currentTime to', targetTime, 'current is', audio.currentTime)
-
-  // 先暂停
-  audio.pause()
-
-  // 直接设置播放位置
-  audio.currentTime = targetTime
-
-  // 等待 seeked 事件确认跳转完成
-  setTimeout(() => {
-    console.log('[executeSeek] Checking currentTime after seek:', audio.currentTime, 'expected:', targetTime)
-
-    if (Math.abs(audio.currentTime - targetTime) < 1) {
-      // Seek 成功
-      audio.play().then(() => {
-        console.log('[executeSeek] Play succeeded, currentTime is', audio.currentTime)
-      }).catch(err => {
-        console.warn('[executeSeek] Play failed:', err)
-      })
-    } else {
-      console.warn('[executeSeek] Seek did not work, currentTime is', audio.currentTime, 'expected', targetTime)
-      audio.currentTime = targetTime
-      setTimeout(() => audio.play().catch(console.warn), 100)
-    }
-  }, 100)
-}
+// 音频播放状态机已迁移到 useAudioPlayback（composable）。
+// 顶部 usePlayer 解构出 audioRef 后注入该 composable。
 
 const bundle = bundleRef
 const audioRef = ref(null)
 const transcriptContainer = ref(null)
 // DynamicScroller 实例引用，用于把它的 scrollToItem 注入到 useSubtitleScroll
 const transcriptScroller = ref(null)
+
+// 音频播放状态机：seek 排队、canplay/seeked 事件、pendingSeek 处理。
+// 一并接管 audioReady / pendingSeek / isSeeking / seekQueue 状态。
+import { useAudioPlayback } from '@/composables/useAudioPlayback'
+const {
+  audioReady,
+  pendingSeek,
+  isSeeking,
+  seekQueue,
+  executeSeek,
+  localSeekTo,
+  onCanPlay,
+  onLoadedData,
+  onCanPlayThrough,
+  onAudioSeeking,
+  onAudioSeeked,
+} = useAudioPlayback({ seekTo, audioRef })
 const subtitleLang = ref('original')
 const expandedChapter = ref(-1)
 const showExportModal = ref(false)
@@ -543,9 +468,7 @@ const showTranscriptEditor = ref(false)
 const loadError = ref(null)
 const loadErrorMessage = ref('')
 
-// Seek queue to prevent race conditions
-const isSeeking = ref(false)
-const seekQueue = ref([])
+// isSeeking / seekQueue 已迁移到 useAudioPlayback（composable），见上方解构。
 
 // Tab 状态
 const activeTab = ref('summary')
@@ -746,55 +669,6 @@ useKeyboardShortcuts({
   onSeek: (deltaSec) => seekRelative(deltaSec),
   onChapter: (direction) => navigateChapter(direction),
 })
-
-const localSeekTo = (ms) => {
-  console.log('[localSeekTo] Called with ms:', ms)
-
-  if (!ms && ms !== 0) {
-    console.warn('[localSeekTo] Invalid timestamp:', ms)
-    return
-  }
-
-  // Add to seek queue if currently seeking
-  if (isSeeking.value) {
-    console.log('[localSeekTo] Already seeking, adding to queue:', ms)
-    seekQueue.value.push(ms)
-    // Keep only the most recent seek (replace entire queue)
-    if (seekQueue.value.length > 1) {
-      seekQueue.value = [ms]
-    }
-    return
-  }
-
-  const targetTime = ms / 1000
-  console.log(`[localSeekTo] Seeking to ${ms}ms (${targetTime.toFixed(2)}s)`)
-
-  // 检查 audioRef
-  console.log('[localSeekTo] audioRef.value:', audioRef.value)
-  console.log('[localSeekTo] audioReady.value:', audioReady.value)
-
-  if (!audioRef.value) {
-    console.warn('[localSeekTo] audioRef is null')
-    seekTo(ms)
-    return
-  }
-
-  const audio = audioRef.value
-  console.log('[localSeekTo] audio.readyState:', audio.readyState)
-  console.log('[localSeekTo] audio.duration:', audio.duration)
-
-  // 如果音频还没准备好，保存待处理的跳转
-  if (!audioReady.value || audio.readyState < 2 || audio.duration === 0) {
-    console.warn('[localSeekTo] Audio not ready, saving pending seek')
-    pendingSeek.value = ms
-    return
-  }
-
-  // 音频已准备好，直接跳转
-  console.log('[localSeekTo] Audio ready, executing seek')
-  isSeeking.value = true
-  executeSeek(ms)
-}
 
 const loadEpisode = async () => {
   try {
