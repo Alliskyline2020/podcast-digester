@@ -1,0 +1,169 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { ref } from 'vue'
+import { useAudioPlayback } from '@/composables/useAudioPlayback'
+
+/**
+ * Test harness: fake <audio> element + usePlayer seekTo stub.
+ */
+function makeHarness({ readyState = 4, duration = 600, currentTime = 0 } = {}) {
+  const audioRef = ref({
+    readyState,
+    duration,
+    currentTime,
+    pause: vi.fn(),
+    play: vi.fn().mockResolvedValue(undefined),
+  })
+  const seekToExternal = vi.fn()
+  const composable = useAudioPlayback({ seekTo: seekToExternal, audioRef })
+  return { audioRef, seekToExternal, ...composable }
+}
+
+describe('useAudioPlayback', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  describe('localSeekTo sanity guards', () => {
+    it('ignores invalid timestamp (null/undefined)', () => {
+      const h = makeHarness()
+      const before = h.isSeeking.value
+      h.localSeekTo(undefined)
+      h.localSeekTo(null)
+      expect(h.isSeeking.value).toBe(before)
+    })
+
+    it('accepts timestamp 0 (valid seek to start)', () => {
+      const h = makeHarness()
+      h.audioReady.value = true
+      h.localSeekTo(0)
+      // 0 是合法值，不应该在 "invalid timestamp" 分支被拒绝
+      expect(h.isSeeking.value).toBe(true)
+    })
+  })
+
+  describe('audio not ready / not mounted', () => {
+    it('defers via seekTo external when audioRef is null', () => {
+      const audioRef = ref(null)
+      const seekToExternal = vi.fn()
+      const { localSeekTo } = useAudioPlayback({ seekTo: seekToExternal, audioRef })
+      localSeekTo(5000)
+      expect(seekToExternal).toHaveBeenCalledWith(5000)
+    })
+
+    it('stores pendingSeek when audioReady is false', () => {
+      const h = makeHarness({ readyState: 1, duration: 0 })
+      // audioReady 初始 false
+      expect(h.audioReady.value).toBe(false)
+      h.localSeekTo(5000)
+      expect(h.pendingSeek.value).toBe(5000)
+      expect(h.isSeeking.value).toBe(false)
+    })
+
+    it('stores pendingSeek when duration is 0', () => {
+      const h = makeHarness({ readyState: 4, duration: 0 })
+      // 即使 readyState OK，duration 为 0 也不该执行 seek
+      h.localSeekTo(5000)
+      expect(h.pendingSeek.value).toBe(5000)
+    })
+  })
+
+  describe('seek queue: only latest survives', () => {
+    it('replaces queue when seeking while busy', () => {
+      const h = makeHarness()
+      h.audioReady.value = true
+      h.localSeekTo(1000) // 进入 isSeeking 状态
+      expect(h.isSeeking.value).toBe(true)
+
+      // 在 isSeeking 期间排队 3 次 seek
+      h.localSeekTo(2000)
+      h.localSeekTo(3000)
+      h.localSeekTo(4000)
+
+      // 只保留最后一个，避免积压
+      expect(h.seekQueue.value).toEqual([4000])
+    })
+  })
+
+  describe('onAudioSeeked flushes queue', () => {
+    it('clears isSeeking and pulls next seek from queue', () => {
+      const h = makeHarness()
+      h.audioReady.value = true
+      h.localSeekTo(1000)
+      h.localSeekTo(2000) // queued
+      expect(h.isSeeking.value).toBe(true)
+      expect(h.seekQueue.value).toEqual([2000])
+
+      h.onAudioSeeked()
+      // isSeeking should be cleared; queue drained
+      expect(h.isSeeking.value).toBe(false)
+      expect(h.seekQueue.value).toEqual([])
+
+      // The queued seek should fire after setTimeout(50)
+      // Fast-forward fake timers
+      vi.advanceTimersByTime(60)
+      // After flush, audio.pause was called by executeSeek
+      // (the queued 2000 should have triggered executeSeek)
+      expect(h.audioRef.value.pause).toHaveBeenCalled()
+    })
+  })
+
+  describe('onCanPlay triggers pendingSeek', () => {
+    it('clears pendingSeek and executes it once audio becomes ready', () => {
+      const h = makeHarness({ readyState: 2, duration: 0 })
+      h.localSeekTo(7000)
+      expect(h.pendingSeek.value).toBe(7000)
+
+      // simulate audio finishing load
+      h.audioRef.value.readyState = 4
+      h.audioRef.value.duration = 600
+      h.onCanPlay({ type: 'canplay' })
+
+      expect(h.audioReady.value).toBe(true)
+      expect(h.pendingSeek.value).toBe(null)
+
+      vi.advanceTimersByTime(10)
+      // executeSeek should have run, which calls audio.pause + sets currentTime
+      expect(h.audioRef.value.pause).toHaveBeenCalled()
+    })
+
+    it('skips canplay if already ready and past 1s playback (avoid spurious replay)', () => {
+      const h = makeHarness()
+      // 模拟 already playing past 1s
+      h.audioReady.value = true
+      h.audioRef.value.currentTime = 5
+
+      const pauseBefore = h.audioRef.value.pause.mock.calls.length
+      h.onCanPlay({ type: 'canplay' })
+      // 不应该触发新的 executeSeek
+      vi.advanceTimersByTime(10)
+      expect(h.audioRef.value.pause.mock.calls.length).toBe(pauseBefore)
+    })
+  })
+
+  describe('executeSeek lands on target', () => {
+    it('sets audio.currentTime = ms/1000', () => {
+      const h = makeHarness()
+      h.executeSeek(12345)
+      expect(h.audioRef.value.currentTime).toBe(12.345)
+    })
+
+    it('plays after seek if landing within tolerance', () => {
+      const h = makeHarness()
+      h.executeSeek(1000)
+      // Before timer fires, play not yet called
+      expect(h.audioRef.value.play).not.toHaveBeenCalled()
+      vi.advanceTimersByTime(110)
+      expect(h.audioRef.value.play).toHaveBeenCalled()
+    })
+
+    it('retries when first seek did not land', () => {
+      const h = makeHarness()
+      h.executeSeek(1000)
+      // simulate browser NOT landing on target (drift > 1s)
+      h.audioRef.value.currentTime = 50
+      vi.advanceTimersByTime(110)
+      // Should have retried: currentTime reset to target
+      expect(h.audioRef.value.currentTime).toBe(1)
+    })
+  })
+})
