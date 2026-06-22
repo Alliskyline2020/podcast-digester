@@ -17,11 +17,12 @@ import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+import aiosqlite
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from .. import deps
-from ..config import settings
+from ..config import DB_PATH, settings
 from ..database import EpisodeRepository, UsageLogRepository
 from ..ingest import run_ingest
 from ..models import (
