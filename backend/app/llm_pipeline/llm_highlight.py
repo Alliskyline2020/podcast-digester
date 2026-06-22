@@ -64,6 +64,10 @@ async def extract_highlights(
             user=user_input,
             temperature=0.3,
             response_format={"type": "json_object"},
+            # Highlight 输出包含多条 quote/insight/fact/contrarian/story，
+            # 每条都有 text_zh + why_zh + cited_segment_ids。长节目（3h+）容易
+            # 超过 4K 默认上限被截断 → JSON 解析失败。DeepSeek-chat 上限 8192。
+            max_tokens=8192,
         )
 
         # 解析 highlights，跳过无效项
