@@ -37,7 +37,7 @@ from .utils.validation import validate_raw_input
 from .utils.io import safe_read_json
 from .errors import PodcastError
 from .rate_limit import rate_limit, limiter as _global_limiter
-from .deps import data_dir, verify_admin, is_loopback as _is_loopback
+from .deps import data_dir, verify_admin, is_loopback as _is_loopback, WriteAuthMiddleware
 from .services.background_tasks import (
     log_task_exception as _log_task_exception,
     create_background_task as _create_background_task,
@@ -148,6 +148,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# 全局写操作认证：当 PODCAST_DIGESTER_ADMIN_TOKEN 配置后，所有 POST/PUT/DELETE
+# 必须带 X-Admin-Token。token 未配置时（开发默认）放行所有请求。
+app.add_middleware(WriteAuthMiddleware)
 
 # 静态文件服务
 # data_dir 需要指向项目根目录的 data 文件夹

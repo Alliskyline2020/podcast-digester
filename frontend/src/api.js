@@ -4,15 +4,56 @@
 const API_BASE = '/api'
 
 /**
+ * 管理 X-Admin-Token。
+ *
+ * 当后端配置了 PODCAST_DIGESTER_ADMIN_TOKEN 时（公网部署场景），前端必须
+ * 在每个写请求里带上相同 token。把它存在 localStorage 里，避免每次刷新都
+ * 重新输入。
+ *
+ * 通过 setAdminToken(token) 设置（一般在登录/设置 UI 调用）；
+ * 通过 clearAdminToken() 清除（登出）。
+ */
+const ADMIN_TOKEN_KEY = 'podcast_digester_admin_token'
+
+export function getAdminToken() {
+  try {
+    return localStorage.getItem(ADMIN_TOKEN_KEY) || ''
+  } catch {
+    // localStorage 在某些隐私模式下会抛错，降级为无 token
+    return ''
+  }
+}
+
+export function setAdminToken(token) {
+  try {
+    if (token) localStorage.setItem(ADMIN_TOKEN_KEY, token)
+    else localStorage.removeItem(ADMIN_TOKEN_KEY)
+  } catch {
+    // ignore
+  }
+}
+
+export function clearAdminToken() {
+  setAdminToken('')
+}
+
+/**
  * 带超时的 fetch 包装。
  * 默认 15s 超时；LLM 等长耗时端点调用方可显式传入更长 timeout。
  * 没有超时的 fetch 在后端 hang 会让 UI 永远转圈，这是排第一的 UX 抱怨。
+ *
+ * 同时自动注入 X-Admin-Token 头（如果 localStorage 里有），简化调用方。
  */
 async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
-    return await fetch(url, { ...options, signal: controller.signal })
+    const token = getAdminToken()
+    const headers = { ...(options.headers || {}) }
+    if (token && !headers['X-Admin-Token']) {
+      headers['X-Admin-Token'] = token
+    }
+    return await fetch(url, { ...options, headers, signal: controller.signal })
   } catch (err) {
     if (err.name === 'AbortError') {
       throw new Error(`请求超时 (${timeoutMs}ms): ${url}`)

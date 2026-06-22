@@ -14,6 +14,9 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import HTTPException, Request
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request as StarletteRequest
+from starlette.responses import JSONResponse
 
 from .config import settings
 
@@ -65,3 +68,63 @@ async def verify_admin(request: Request) -> None:
                 status_code=403,
                 detail="Admin endpoints require PODCAST_DIGESTER_ADMIN_TOKEN for non-loopback access",
             )
+
+
+# ==================== 全局写操作认证中间件 ====================
+
+# 路径前缀 → 是否豁免写认证。
+# - GET / 任何路径：豁免（只读）
+# - /media/, /fixtures/, /api/exports/：豁免（资源下载，不需要 token；
+#   export POST 已经各自带 rate_limit）
+# - 非 /api/ 开头：豁免（静态 / openapi / docs）
+_WRITE_AUTH_EXEMPT_PREFIXES = (
+    "/media/",
+    "/fixtures/",
+    "/api/exports/",
+)
+
+
+class WriteAuthMiddleware(BaseHTTPMiddleware):
+    """
+    全局写操作认证中间件。
+
+    策略：
+    - 若 PODCAST_DIGESTER_ADMIN_TOKEN 未配置：放行所有请求（开发模式，
+      假定只在 loopback 暴露）。
+    - 若已配置：所有 POST / PUT / DELETE / PATCH 请求（除豁免的静态/导出
+      下载路径外）必须在 X-Admin-Token 头里携带正确 token；否则返回 401。
+      GET / HEAD 一律豁免（只读）。
+
+    这道全局兜底覆盖所有 router，避免每个端点单独挂依赖时漏挂。
+    router 自己挂的 verify_admin 在批量管理端点上仍保留，是双层防御。
+    """
+
+    async def dispatch(self, request: StarletteRequest, call_next):
+        # Token 未配置：开发模式，不做认证
+        if not settings.admin_token:
+            return await call_next(request)
+
+        method = request.method.upper()
+        path = request.url.path
+
+        # 只读方法豁免
+        if method in ("GET", "HEAD", "OPTIONS"):
+            return await call_next(request)
+
+        # 静态资源 / 导出文件下载豁免（导出本身的 POST 由 rate_limit 保护）
+        if path.startswith(_WRITE_AUTH_EXEMPT_PREFIXES):
+            return await call_next(request)
+
+        # 非 API 路径豁免（openapi / docs / redoc / 健康检查）
+        if not path.startswith("/api/"):
+            return await call_next(request)
+
+        # 检查 X-Admin-Token
+        provided = request.headers.get("X-Admin-Token", "")
+        if not hmac.compare_digest(provided, settings.admin_token):
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Invalid or missing X-Admin-Token header"},
+            )
+
+        return await call_next(request)
