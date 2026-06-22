@@ -19,7 +19,10 @@ import { ref, nextTick } from 'vue'
 export function useSubtitleScroll(containerRef, items, options = {}) {
   const {
     block = 'center',      // 默认居中显示
-    threshold = 500        // 500ms 容差
+    threshold = 500,       // 500ms 容差
+    // 可选：虚拟滚动器（如 vue-virtual-scroller 的 DynamicScroller）提供的
+    // 按 index 滚动 API。传入后优先用它，避免 querySelector 找不到被回收的元素。
+    scrollToItemFn = null,
   } = options
 
   const isScrolling = ref(false)
@@ -102,16 +105,28 @@ export function useSubtitleScroll(containerRef, items, options = {}) {
           return
         }
 
-        const targetElement = container.querySelector(`[data-paragraph-id="${index}"]`)
-
-        if (targetElement) {
-          targetElement.scrollIntoView({
-            behavior: 'smooth',
-            block: block
-          })
+        // 优先用虚拟滚动器的 scrollToItem API（如果调用方提供了）。
+        // 这是因为 DynamicScroller/RecycleScroller 会回收视口外的 DOM，
+        // querySelector 在远距离 index 上找不到元素。
+        if (typeof scrollToItemFn === 'function') {
+          try {
+            scrollToItemFn(index)
+          } catch (err) {
+            hasError.value = true
+            errorMessage.value = `scrollToItemFn failed: ${err.message}`
+          }
         } else {
-          hasError.value = true
-          errorMessage.value = `Target element at index ${index} not found`
+          const targetElement = container.querySelector(`[data-paragraph-id="${index}"]`)
+
+          if (targetElement) {
+            targetElement.scrollIntoView({
+              behavior: 'smooth',
+              block: block
+            })
+          } else {
+            hasError.value = true
+            errorMessage.value = `Target element at index ${index} not found`
+          }
         }
 
         // 防抖标记

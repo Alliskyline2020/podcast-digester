@@ -225,20 +225,34 @@
             v-if="paragraphs.length > 0"
             @scroll="handleUserScroll"
           >
-            <div
-              v-for="(para, idx) in paragraphs"
-              :key="para.id"
-              :data-paragraph-id="idx"
-              class="subtitle-block"
-              :class="{ active: isCurrentParagraph(para) }"
-              @click="localSeekTo(para.start_ms)"
+            <DynamicScroller
+              ref="transcriptScroller"
+              :items="paragraphs"
+              :min-item-size="60"
+              key-field="id"
+              class="transcript-scroller"
+              v-slot="{ item, index, active }"
             >
-              <span class="block-time">{{ formatTimeRange(para.start_ms, para.end_ms) }}</span>
-              <div class="block-content">
-                <span v-if="subtitleLang === 'original' || subtitleLang === 'both'" class="block-text">{{ para.text_clean || para.text_original }}</span>
-                <span v-if="subtitleLang === 'translated' || subtitleLang === 'both'" class="block-translated">{{ para.text_translated || para.text_clean || para.text_original }}</span>
-              </div>
-            </div>
+              <DynamicScrollerItem
+                :item="item"
+                :active="active"
+                :data-index="index"
+                :data-paragraph-id="index"
+              >
+                <div
+                  :key="item.id"
+                  class="subtitle-block"
+                  :class="{ active: isCurrentParagraph(item) }"
+                  @click="localSeekTo(item.start_ms)"
+                >
+                  <span class="block-time">{{ formatTimeRange(item.start_ms, item.end_ms) }}</span>
+                  <div class="block-content">
+                    <span v-if="subtitleLang === 'original' || subtitleLang === 'both'" class="block-text">{{ item.text_clean || item.text_original }}</span>
+                    <span v-if="subtitleLang === 'translated' || subtitleLang === 'both'" class="block-translated">{{ item.text_translated || item.text_clean || item.text_original }}</span>
+                  </div>
+                </div>
+              </DynamicScrollerItem>
+            </DynamicScroller>
           </div>
           <div v-else class="empty-state">
             <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -395,6 +409,7 @@ import TranscriptEditor from '@/components/TranscriptEditor.vue'
 import * as api from '@/api'
 import { usePlayer } from '@/composables/player'
 import { useSubtitleScroll } from '@/composables/useSubtitleScroll'
+import { DynamicScroller, DynamicScrollerItem } from 'vue-virtual-scroller'
 // SubtitleMapping 组件已移除 - 改为直接显示时间范围
 
 const router = useRouter()
@@ -516,6 +531,8 @@ const executeSeek = (ms) => {
 const bundle = bundleRef
 const audioRef = ref(null)
 const transcriptContainer = ref(null)
+// DynamicScroller 实例引用，用于把它的 scrollToItem 注入到 useSubtitleScroll
+const transcriptScroller = ref(null)
 const subtitleLang = ref('original')
 const expandedChapter = ref(-1)
 const showExportModal = ref(false)
@@ -838,7 +855,14 @@ const {
   cleanup: cleanupScroll
 } = useSubtitleScroll(transcriptContainer, paragraphs, {
   block: 'center',
-  threshold: 500
+  threshold: 500,
+  // 虚拟滚动模式下，远距离 index 的 DOM 节点会被回收；
+  // 用 DynamicScroller 自带的 scrollToItem 跳转，绕开 querySelector。
+  scrollToItemFn: (index) => {
+    if (transcriptScroller.value && typeof transcriptScroller.value.scrollToItem === 'function') {
+      transcriptScroller.value.scrollToItem(index)
+    }
+  },
 })
 
 // Watch activeTab changes to enable auto-scroll when switching to transcript tab
@@ -1540,6 +1564,14 @@ onUnmounted(() => {
 .transcript-content {
   display: flex;
   flex-direction: column;
+}
+
+/* DynamicScroller 需要明确的可滚动高度才能虚拟化生效；
+   高度来自父布局（transcript-tab 是 flex 子项）。 */
+.transcript-scroller {
+  flex: 1;
+  height: 100%;
+  overflow-y: auto;
 }
 
 .subtitle-block {
