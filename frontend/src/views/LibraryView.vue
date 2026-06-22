@@ -503,8 +503,8 @@ const executeResume = async () => {
 
 const loadEpisodes = async () => {
   try {
-    const data = await api.listEpisodes()
-    const incoming = data.episodes || []
+    // 注意：api.listEpisodes() 返回的已经是 episodes 数组本身（不是 {episodes: []}）
+    const incoming = await api.listEpisodes()
 
     // 检测状态转换：之前是 processing，现在是 ready/failed。
     // 用户可能在 'processing' 过滤下，节目一变 ready 就从列表消失，
