@@ -38,7 +38,7 @@ export async function listEpisodes() {
  * 获取节目详情
  */
 export async function fetchEpisode(episodeId) {
-  const res = await fetch(`${API_BASE}/episode/${episodeId}`)
+  const res = await fetchWithTimeout(`${API_BASE}/episode/${episodeId}`)
   if (!res.ok) throw new Error('获取节目详情失败')
   const data = await res.json()
   return data.episode
@@ -48,7 +48,7 @@ export async function fetchEpisode(episodeId) {
  * 粘贴新节目
  */
 export async function pasteEpisode(rawInput) {
-  const res = await fetch(`${API_BASE}/paste`, {
+  const res = await fetchWithTimeout(`${API_BASE}/paste`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ raw_input: rawInput }),
@@ -62,7 +62,7 @@ export async function pasteEpisode(rawInput) {
  * 删除节目
  */
 export async function deleteEpisode(episodeId) {
-  const res = await fetch(`${API_BASE}/episode/${episodeId}`, {
+  const res = await fetchWithTimeout(`${API_BASE}/episode/${episodeId}`, {
     method: 'DELETE',
   })
   if (!res.ok) throw new Error('删除失败')
@@ -74,7 +74,7 @@ export async function deleteEpisode(episodeId) {
  * 取消正在处理的任务
  */
 export async function cancelEpisode(episodeId) {
-  const res = await fetch(`${API_BASE}/episode/${episodeId}/cancel`, {
+  const res = await fetchWithTimeout(`${API_BASE}/episode/${episodeId}/cancel`, {
     method: 'POST',
   })
   if (!res.ok) throw new Error('取消失败')
@@ -86,7 +86,7 @@ export async function cancelEpisode(episodeId) {
  * 恢复失败的任务
  */
 export async function resumeEpisode(episodeId, rawInput) {
-  const res = await fetch(`${API_BASE}/episode/${episodeId}/resume`, {
+  const res = await fetchWithTimeout(`${API_BASE}/episode/${episodeId}/resume`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ raw_input: rawInput }),
@@ -103,7 +103,7 @@ export async function resumeEpisode(episodeId, rawInput) {
  * 标记播放
  */
 export async function markPlayed(episodeId, positionMs = null) {
-  const res = await fetch(`${API_BASE}/episode/${episodeId}/play`, {
+  const res = await fetchWithTimeout(`${API_BASE}/episode/${episodeId}/play`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ position_ms: positionMs }),
@@ -144,7 +144,8 @@ export async function loadFixtureEpisode() {
  * @returns {Promise<{download_url: string, format: string, expires_at: string, file_size: number}>}
  */
 export async function exportEpisode(episodeId, format = 'html', options = {}) {
-  const res = await fetch(`${API_BASE}/episodes/${episodeId}/export`, {
+  // PNG 导出走 playwright，可能要十几秒；HTML 一般 <1s。给 60s 余量。
+  const res = await fetchWithTimeout(`${API_BASE}/episodes/${episodeId}/export`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -153,7 +154,7 @@ export async function exportEpisode(episodeId, format = 'html', options = {}) {
       theme: options.theme || 'light',
       width: options.width || 1080
     })
-  })
+  }, 60000)
 
   if (!res.ok) {
     const error = await res.json()
@@ -169,7 +170,7 @@ export async function exportEpisode(episodeId, format = 'html', options = {}) {
  * @param {string} filename - 建议的文件名
  */
 export async function downloadExport(url, filename) {
-  const res = await fetch(url)
+  const res = await fetchWithTimeout(url)
   if (!res.ok) throw new Error('下载失败')
 
   const blob = await res.blob()
@@ -184,7 +185,7 @@ export async function downloadExport(url, filename) {
  * 获取节目详情（新版本，包含episode bundle）
  */
 export async function getEpisode(episodeId) {
-  const res = await fetch(`${API_BASE}/episode/${episodeId}`)
+  const res = await fetchWithTimeout(`${API_BASE}/episode/${episodeId}`)
   if (!res.ok) throw new Error('获取节目详情失败')
   const data = await res.json()
   return data
@@ -194,7 +195,7 @@ export async function getEpisode(episodeId) {
  * 获取字幕
  */
 export async function getTranscript(episodeId) {
-  const res = await fetch(`${API_BASE}/episodes/${episodeId}/transcript`)
+  const res = await fetchWithTimeout(`${API_BASE}/episodes/${episodeId}/transcript`)
   if (!res.ok) throw new Error('获取字幕失败')
   return await res.json()
 }
@@ -203,7 +204,7 @@ export async function getTranscript(episodeId) {
  * 更新字幕segment
  */
 export async function updateTranscriptSegment(episodeId, { segment_index, text_original, note_to_glossary }) {
-  const res = await fetch(`${API_BASE}/episodes/${episodeId}/segments/update`, {
+  const res = await fetchWithTimeout(`${API_BASE}/episodes/${episodeId}/segments/update`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ segment_index, text_original, note_to_glossary })
@@ -216,9 +217,10 @@ export async function updateTranscriptSegment(episodeId, { segment_index, text_o
  * 应用词库纠错
  */
 export async function applyGlossary(episodeId) {
-  const res = await fetch(`${API_BASE}/episodes/${episodeId}/apply-glossary`, {
+  // 词库纠错会扫描所有 segment，大节目可能要十几秒
+  const res = await fetchWithTimeout(`${API_BASE}/episodes/${episodeId}/apply-glossary`, {
     method: 'POST'
-  })
+  }, 60000)
   if (!res.ok) throw new Error('词库纠错失败')
   return await res.json()
 }
@@ -227,7 +229,7 @@ export async function applyGlossary(episodeId) {
  * 获取词库
  */
 export async function getGlossary() {
-  const res = await fetch(`${API_BASE}/glossary/entries`, {
+  const res = await fetchWithTimeout(`${API_BASE}/glossary/entries`, {
     method: 'POST'
   })
   if (!res.ok) throw new Error('获取词库失败')
@@ -238,7 +240,7 @@ export async function getGlossary() {
  * 添加词库条目
  */
 export async function addGlossaryEntry({ correct, wrong }) {
-  const res = await fetch(`${API_BASE}/glossary/add`, {
+  const res = await fetchWithTimeout(`${API_BASE}/glossary/add`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ correct, wrong })
@@ -251,7 +253,7 @@ export async function addGlossaryEntry({ correct, wrong }) {
  * 删除词库条目
  */
 export async function deleteGlossaryEntry(correct) {
-  const res = await fetch(`${API_BASE}/glossary/entries/${encodeURIComponent(correct)}`, {
+  const res = await fetchWithTimeout(`${API_BASE}/glossary/entries/${encodeURIComponent(correct)}`, {
     method: 'DELETE'
   })
   if (!res.ok) throw new Error('删除词库条目失败')
