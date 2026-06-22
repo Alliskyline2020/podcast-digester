@@ -125,8 +125,14 @@
         </div>
       </div>
 
+      <!-- 加载中状态：初次加载时避免误显示"暂无节目" -->
+      <div v-if="isLoading" class="empty-state" role="status" aria-live="polite">
+        <div class="loading-spinner" aria-hidden="true"></div>
+        <p>加载节目中...</p>
+      </div>
+
       <!-- 空状态 -->
-      <div v-if="filteredEpisodes.length === 0" class="empty-state">
+      <div v-else-if="filteredEpisodes.length === 0" class="empty-state">
         <div v-if="episodes.length > 0 && searchQuery" class="no-results">
           <div class="empty-icon">🔍</div>
           <p>没有找到匹配的节目</p>
@@ -229,6 +235,8 @@ const router = useRouter()
 
 const inputText = ref('')
 const episodes = ref([])
+// 首次加载标志：为 true 时显示加载态，避免在数据到达前误显示"暂无节目"
+const isLoading = ref(true)
 const isPasting = ref(false)
 const error = ref('')
 let pollInterval = null
@@ -458,6 +466,9 @@ const loadEpisodes = async () => {
     episodes.value = data.episodes || []
   } catch (e) {
     console.error('加载节目列表失败:', e)
+  } finally {
+    // 首次加载完成后才允许展示空状态，避免误闪
+    isLoading.value = false
   }
 }
 
@@ -1063,6 +1074,23 @@ onUnmounted(() => {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
+}
+
+/* 加载态 spinner */
+.loading-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid #e5e7eb;
+  border-top-color: #4f8ef7;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin: 0 auto 12px;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .admin-token-btn {
