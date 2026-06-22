@@ -21,6 +21,16 @@
             {{ filter.label }}
           </button>
         </div>
+        <!-- Admin token 设置入口；后端配置了 ADMIN_TOKEN 时，写操作需要这个 -->
+        <button
+          @click="showTokenDialog = true"
+          class="admin-token-btn"
+          :class="{ 'admin-token-btn-active': hasAdminToken }"
+          :aria-label="hasAdminToken ? '管理 admin token（已设置）' : '设置 admin token'"
+          :title="hasAdminToken ? 'Admin token 已设置（点击修改/登出）' : '设置 admin token'"
+        >
+          <span aria-hidden="true">{{ hasAdminToken ? '🔓' : '🔒' }}</span>
+        </button>
       </div>
     </div>
 
@@ -196,6 +206,11 @@
       </div>
     </div>
     </div>
+    <!-- Admin token 设置对话框 -->
+    <TokenDialog
+      :show="showTokenDialog"
+      @cancel="showTokenDialog = false"
+    />
   </div>
 </template>
 
@@ -204,6 +219,11 @@ import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import * as api from '@/api'
 import { validatePodcastInput } from '@/utils/validation'
+import { useAdminAuth } from '@/composables/useAdminAuth'
+import TokenDialog from '@/components/TokenDialog.vue'
+
+const { hasToken: hasAdminToken } = useAdminAuth()
+const showTokenDialog = ref(false)
 
 const router = useRouter()
 
@@ -1043,5 +1063,37 @@ onUnmounted(() => {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
+}
+
+.admin-token-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  margin-left: 8px;
+  background: transparent;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  color: #6b7280;
+  transition: all 0.15s;
+}
+
+.admin-token-btn:hover {
+  background: #f3f4f6;
+  border-color: #d1d5db;
+}
+
+.admin-token-btn-active {
+  background: #ecfdf5;
+  border-color: #10b981;
+  color: #047857;
+}
+
+.admin-token-btn-active:hover {
+  background: #d1fae5;
 }
 </style>
