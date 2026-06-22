@@ -51,6 +51,17 @@
       />
     </div>
 
+    <!-- 加载中提示：bundle 还没拿到时，避免界面看起来像"未知节目"bug -->
+    <div
+      v-if="!bundle && !loadError"
+      class="loading-banner"
+      role="status"
+      aria-live="polite"
+    >
+      <div class="loading-spinner-small" aria-hidden="true"></div>
+      <span>加载节目中...</span>
+    </div>
+
     <!-- Error message display -->
     <transition name="fade">
       <div v-if="loadError" class="error-banner">
@@ -880,6 +891,32 @@ onUnmounted(() => {
   padding: 12px 20px;
   background: white;
   border-bottom: 1px solid #e5e7eb;
+}
+
+/* Loading banner: 初次加载时给用户视觉反馈 */
+.loading-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
+  color: #6b7280;
+  font-size: 14px;
+}
+
+.loading-spinner-small {
+  width: 18px;
+  height: 18px;
+  border: 2px solid #e5e7eb;
+  border-top-color: #4f8ef7;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* Error banner */
