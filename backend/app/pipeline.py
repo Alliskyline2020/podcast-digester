@@ -140,6 +140,20 @@ class AudioProcessPipeline:
             async with self._lock:
                 self.current_tasks.pop(episode_id, None)
 
+    def _checkpoint_json(self, episode_id: str, filename: str, data) -> None:
+        """阶段级 checkpoint：立即把单个中间产物落盘，不碰 episode 状态。
+
+        save_episode_bundle 只在最后阶段 8 一次性写入并把 status 翻成 ready，
+        中途崩溃会丢失所有产物；而 product_insights 等阶段需要读前面的 JSON。
+        所以每个阶段完成后单独写一份，保证后续阶段可读 + 崩溃可恢复。
+        """
+        import json
+        media_dir = self.data_dir / "media" / episode_id
+        media_dir.mkdir(parents=True, exist_ok=True)
+        with open(media_dir / filename, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        logger.info(f"[checkpoint] {filename} saved for {episode_id}")
+
     async def _process_internal(
         self,
         episode_id: str,
@@ -188,16 +202,17 @@ class AudioProcessPipeline:
         media_dir.mkdir(parents=True, exist_ok=True)
 
         # 下载带进度回调
-        async def download_progress(s, p):
+        def download_progress(s, p):
             stages[-1]["progress"] = p
             if on_progress:
                 on_progress("download", p)
-            # 实时同步到数据库
-            await IngestJobRepository.update_stages(
+            # yt-dlp 进度回调是同步的；DB 写库 fire-and-forget，
+            # 否则 async 函数被同步调用会变成 never-awaited 协程
+            asyncio.create_task(IngestJobRepository.update_stages(
                 episode_id,
                 [self._format_stage(s) for s in stages],
                 stages[-1]["id"],
-            )
+            ))
 
         parse_result = await parser.parse(raw_input, episode_id, media_dir, download_progress)
 
@@ -214,25 +229,15 @@ class AudioProcessPipeline:
         # === 阶段 2: 转录 ===
         await self._add_stage(stages, "transcribe", EpisodeStatus.ASR_RUNNING, sync_stages)
 
-        # 优先尝试获取字幕（跳过 ASR）
-        transcript = await self._try_fetch_subtitles(raw_input, episode_id)
+        # 优先复用本地已有 transcript，没有才 ASR
+        transcript = await self._load_transcript(episode_id)
 
-        # 如果没有字幕，检查是否有预转录
         if not transcript:
-            transcript = parse_result.extra.get("transcript")
-
-        # 如果还是没有字幕，尝试从文件加载
-        if not transcript:
-            transcript = await self._load_transcript(episode_id)
-
-        # 最后才使用 ASR（本地计算，资源密集）
-        if not transcript:
-            logger.info(f"No subtitles found for {episode_id}, using Apple AFM 3 Core Advanced")
+            logger.info(f"No local transcript for {episode_id}, using Apple AFM 3")
             transcript = await run_asr(parse_result.audio_path, None)
             transcript.episode_id = episode_id
-            # Apple AFM 3默认中文，无需更新language字段
         else:
-            logger.info(f"Using fetched subtitles for {episode_id}, skipping ASR")
+            logger.info(f"Using local transcript for {episode_id}, skipping ASR")
             transcript.episode_id = episode_id
             if transcript.language:
                 await EpisodeRepository.update(episode_id, language=transcript.language)
@@ -244,6 +249,7 @@ class AudioProcessPipeline:
         if transcript.language == "zh" and self._needs_punctuation(transcript):
             await self._add_punctuation_to_transcript(episode_id, transcript, on_progress)
 
+        self._checkpoint_json(episode_id, "transcript.json", transcript.model_dump())
         await self._complete_stage(stages, "transcribe", completed_stages, sync_stages)
 
         # === 阶段 3: 分章 ===
@@ -253,6 +259,7 @@ class AudioProcessPipeline:
             transcript,
             progress_cb=lambda p: self._update_stage_progress_sync(stages, "chapterize", p, episode_id, sync_stages),
         )
+        self._checkpoint_json(episode_id, "outline.json", {"entries": chapters})
         await self._complete_stage(stages, "chapterize", completed_stages, sync_stages)
 
         # === 阶段 4: 章节摘要 ===
@@ -262,6 +269,7 @@ class AudioProcessPipeline:
             chapters, transcript,
             progress_cb=lambda p: self._update_stage_progress_sync(stages, "summarize", p, episode_id, sync_stages),
         )
+        self._checkpoint_json(episode_id, "summaries.json", summaries)
         await self._complete_stage(stages, "summarize", completed_stages, sync_stages)
 
         # === 阶段 5: 翻译（可选）===
@@ -272,6 +280,14 @@ class AudioProcessPipeline:
                 transcript,
                 progress_cb=lambda p: self._update_stage_progress_sync(stages, "translate", p, episode_id, sync_stages),
             )
+            # translate_segments 返回 [{"id": i, "text_zh": "..."}]，不会回填 transcript；
+            # 这里按 id 合并到 segment.text_translated，否则下游 checkpoint 拿不到翻译。
+            if translations:
+                by_id = {t.get("id"): (t.get("text_zh") or t.get("text_translated") or "") for t in translations}
+                for seg in transcript.segments:
+                    if seg.id in by_id:
+                        seg.text_translated = by_id[seg.id]
+            self._checkpoint_json(episode_id, "transcript.json", transcript.model_dump())
             await self._complete_stage(stages, "translate", completed_stages, sync_stages)
 
         # === 阶段 6: 高亮提取 ===
@@ -285,6 +301,7 @@ class AudioProcessPipeline:
             transcript,
             progress_cb=lambda p: self._update_stage_progress_sync(stages, "highlight", p, episode_id, sync_stages),
         )
+        self._checkpoint_json(episode_id, "highlight.json", highlight.model_dump())
         await self._complete_stage(stages, "highlight", completed_stages, sync_stages)
 
         # === 阶段 7: 产品和技术洞察 ===
@@ -465,7 +482,7 @@ class AudioProcessPipeline:
         punct_count = 0
 
         for seg in transcript.segments[:check_count]:
-            text = seg.get("text_original", "")
+            text = seg.text_original or ""
             if any(c in text for c in "。！？，、；：,.!?"):
                 punct_count += 1
 
@@ -696,15 +713,15 @@ class AudioProcessPipeline:
             media_dir = self.data_dir / "media" / episode_id
             media_dir.mkdir(parents=True, exist_ok=True)
 
-            async def download_progress(s, p):
+            def download_progress(s, p):
                 stages[-1]["progress"] = p
                 if on_progress:
                     on_progress("download", p)
-                await IngestJobRepository.update_stages(
+                asyncio.create_task(IngestJobRepository.update_stages(
                     episode_id,
                     [self._format_stage(s) for s in stages],
                     stages[-1]["id"],
-                )
+                ))
 
             parse_result = await parser.parse(raw_input, episode_id, media_dir, download_progress)
 
@@ -789,6 +806,15 @@ class AudioProcessPipeline:
                 transcript,
                 progress_cb=lambda p: self._update_stage_progress_sync(stages, "translate", p, episode_id, sync_stages),
             )
+            # translate_segments 返回 [{"id": i, "text_zh": "..."}]，不会回填 transcript；
+            # 这里按 id 合并到 segment.text_translated，否则下游 checkpoint / save 拿不到翻译。
+            # 注意：此 merge 必须与 _process_internal 的 translate 阶段保持一致。
+            if translations:
+                by_id = {t.get("id"): (t.get("text_zh") or t.get("text_translated") or "") for t in translations}
+                for seg in transcript.segments:
+                    if seg.id in by_id:
+                        seg.text_translated = by_id[seg.id]
+            self._checkpoint_json(episode_id, "transcript.json", transcript.model_dump())
             await self._complete_stage(stages, "translate", completed_stages, sync_stages)
 
         # === 阶段 6: 高亮提取（如需要）===

@@ -254,8 +254,16 @@ def _build_subtitle_command(
     sub_langs: str,
     cookies_file: Optional[Path] = None,
     browser: Optional[str] = None,
+    remote_components: bool = False,
 ) -> List[str]:
-    """构建字幕下载命令"""
+    """构建字幕下载命令
+
+    Args:
+        remote_components: 是否启用 --remote-components ejs:github。
+            2026 年 YouTube 引入新的 n challenge，需要 EJS solver 才能拿到
+            翻译型自动字幕（zh-Hans-en / en-en）。实测 android_vr/web_embedded
+            client + remote-components 组合可绕过 429 限流。
+    """
     cmd = YTDLP_CMD + [
         "--write-subs",
         "--write-auto-subs",  # Fallback to auto subs if manual subs not available
@@ -353,6 +361,7 @@ async def _try_subtitle_fetch(
     sub_langs: str,
     cookies_file: Optional[Path] = None,
     browser: Optional[str] = None,
+    remote_components: bool = False,
 ) -> tuple[bool, Optional[dict], str]:
     """
     尝试使用指定配置获取字幕（支持双语）
@@ -374,7 +383,8 @@ async def _try_subtitle_fetch(
     logger.info(f"Fetching subtitles with {strategy_desc}")
 
     cmd = _build_subtitle_command(
-        safe_url, temp_dir, client, sub_langs, cookies_file, browser
+        safe_url, temp_dir, client, sub_langs, cookies_file, browser,
+        remote_components=remote_components,
     )
 
     process = await asyncio.create_subprocess_exec(
@@ -503,7 +513,34 @@ async def fetch_youtube_subtitles(url: str) -> Optional[dict]:
         available_browsers = get_available_browsers()
         cookies_txt = find_cookies_txt()
 
-        # 定义降级策略链
+        # 2026 YouTube 翻译型自动字幕代码是 xx-en 格式（"from English"），
+        # 旧版只有 zh-Hans/en，匹配不到 zh-Hans-en/en-en，导致"no subtitles"。
+        # 这里同时兼容新（带 -en 后缀）旧格式。
+        SUB_LANGS_2026 = "zh-Hans-en,en-en,zh-Hans,zh-Hant-en,zh-Hant,en"
+
+        # === 2026 黄金组合（最高优先级，实测最稳）===
+        # cookies.txt + android_vr/web_embedded client + --remote-components ejs:github
+        # 能解 YouTube 新的 n challenge 并绕过 429，拿到翻译型自动字幕。
+        # 成功就立即返回；失败则继续走下面的多级降级链。
+        if cookies_txt:
+            for client in ["android_vr", "web_embedded"]:
+                logger.info(f"[黄金组合] client={client} + remote-components + cookies.txt")
+                try:
+                    success, transcript, result_type = await _try_subtitle_fetch(
+                        safe_url, temp_dir, client, SUB_LANGS_2026,
+                        cookies_file=cookies_txt, remote_components=True,
+                    )
+                    if success:
+                        logger.info(f"✅ 黄金组合成功: client={client} ({len(transcript.segments)} segments)")
+                        return transcript
+                    if result_type == "rate_limit":
+                        logger.info("↓ 黄金组合限流，等待后降级")
+                        await asyncio.sleep(3)
+                except Exception as e:
+                    logger.info(f"↓ 黄金组合异常: {str(e)[:80]}")
+                    continue
+
+        # 定义降级策略链（黄金组合失败时的 fallback）
         strategies = []
 
         # 策略1-3: 浏览器 Cookies
@@ -526,22 +563,22 @@ async def fetch_youtube_subtitles(url: str) -> Optional[dict]:
             try:
                 if stype == "browser":
                     success, transcript, result_type = await _try_subtitle_fetch(
-                        safe_url, temp_dir, "web", "zh-Hans,zh-Hans,en,en",
+                        safe_url, temp_dir, "web", SUB_LANGS_2026,
                         browser=svalue
                     )
                 elif stype == "file":
                     success, transcript, result_type = await _try_subtitle_fetch(
-                        safe_url, temp_dir, "web", "zh-Hans,zh-Hans,en,en",
+                        safe_url, temp_dir, "web", SUB_LANGS_2026,
                         cookies_file=svalue
                     )
                 elif stype == "web":
                     success, transcript, result_type = await _try_subtitle_fetch(
-                        safe_url, temp_dir, "web", "zh-Hans,zh-Hans,en,en"
+                        safe_url, temp_dir, "web", SUB_LANGS_2026
                     )
                 elif stype == "mobile":
                     for client in ["android_vr", "android", "ios"]:
                         success, transcript, result_type = await _try_subtitle_fetch(
-                            safe_url, temp_dir, client, "zh-Hans,zh-Hans,en,en"
+                            safe_url, temp_dir, client, SUB_LANGS_2026
                         )
                         if success:
                             break

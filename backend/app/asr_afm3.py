@@ -92,7 +92,7 @@ class AppleASR:
     async def transcribe(
         self,
         audio_path: Path,
-        language: str = "zh-CN",
+        language: str = "en-US",
         on_progress: Optional[Callable] = None,
     ) -> Transcript:
         """
@@ -116,8 +116,11 @@ class AppleASR:
         start_time = time.time()
 
         try:
-            # 调用Swift桥接工具
-            cmd = ["swift", str(BRIDGE_TOOL), str(audio_path)]
+            # BRIDGE_TOOL 是编译好的 Mach-O 可执行文件，直接运行；
+            # 之前用 ["swift", BRIDGE_TOOL, ...] 会让 swift 把二进制当源码解释，
+            # 报 "invalid UTF-8 in source file" 然后回退到慢的 Whisper。
+            # 第三个参数是 locale（如 "zh-CN"/"en-US"），传给桥接选择语音模型。
+            cmd = [str(BRIDGE_TOOL), str(audio_path), language]
 
             logger.info(f"   执行命令: {' '.join(cmd)}")
 
@@ -127,11 +130,10 @@ class AppleASR:
                 stderr=asyncio.subprocess.PIPE
             )
 
-            stdout, stderr = await asyncio.gather(
-                process.communicate(),
-                process.wait(),
-                return_exceptions=True
-            )
+            # communicate() 已等待进程结束、读取 stdout/stderr 并填充 returncode，
+            # 不需要再 gather wait()（之前 gather 返回 [tuple, int] 被错拆成
+            # stdout/stderr，导致 stderr 实际是 returncode → 'int' has no .decode()）
+            stdout, stderr = await process.communicate()
 
             if process.returncode != 0:
                 error_msg = stderr.decode() if stderr else "未知错误"
@@ -152,7 +154,12 @@ class AppleASR:
             if on_progress:
                 on_progress("transcribe", 1.0)
 
-            return Transcript(segments=segments)
+            # Transcript 要求 episode_id + language。episode_id 留空，由调用方
+            # （pipeline）后续赋值；language 从实际转写文本检测（CJK→zh，否则→en），
+            # 不信 Swift 桥接写死的 zh-CN locale——英文节目会被误判成 zh 导致跳过翻译。
+            sample = " ".join(s.text_original for s in segments[:20])
+            detected = "zh" if any("\u4e00" <= ch <= "\u9fff" for ch in sample) else "en"
+            return Transcript(episode_id="", language=detected, segments=segments)
 
         except subprocess.TimeoutExpired:
             raise RuntimeError("❌ Apple ASR超时 (超过2小时)")
@@ -162,31 +169,40 @@ class AppleASR:
 
     def _parse_transcript(self, text: str) -> list[Segment]:
         """
-        解析转录文本为Segment列表
+        解析桥接输出的 JSON 数组为 Segment 列表。
+
+        桥接输出格式：[{"text": "...", "start_ms": int, "end_ms": int}, ...]
+        每个 element 是 phrase 级别的 segment，带真实时间戳（来自 audioTimeRange）。
 
         Args:
-            text: 转录文本
+            text: 桥接 stdout（JSON 数组）
 
         Returns:
-            Segment列表
+            Segment 列表
         """
+        import json
         segments = []
 
-        # 按行分割
-        lines = text.strip().split('\n')
+        try:
+            items = json.loads(text)
+        except json.JSONDecodeError as e:
+            # 兜底：桥接回退到纯文本输出时按行切分，时间戳置 0
+            logger.warning(f"ASR 输出非 JSON，回退纯文本解析: {e}")
+            items = [{"text": ln.strip(), "start_ms": 0, "end_ms": 0}
+                     for ln in text.strip().split("\n") if ln.strip()]
 
-        for i, line in enumerate(lines):
-            if line.strip():
-                segment = Segment(
-                    id=i,
-                    start_ms=0,  # Apple ASR暂不提供精确时间戳
-                    end_ms=0,
-                    text_original=line.strip(),
-                    text_clean=line.strip(),
-                    speaker="A",
-                    language="zh",
-                )
-                segments.append(segment)
+        for i, item in enumerate(items):
+            seg_text = (item.get("text") or "").strip()
+            if not seg_text:
+                continue
+            segments.append(Segment(
+                id=i,
+                start_ms=int(item.get("start_ms", 0) or 0),
+                end_ms=int(item.get("end_ms", 0) or 0),
+                text_original=seg_text,
+                # Apple Speech API 不提供说话人区分（已确认无 speaker attribute）
+                speaker="A",
+            ))
 
         return segments
 
@@ -229,10 +245,13 @@ async def run_asr(
     # 获取Apple ASR实例
     asr = get_apple_asr()
 
-    # 执行转录
+    # 执行转录。
+    # 默认 en-US：AFM 模型的输出语种 = locale 语种（zh-CN 会把英文音频直接译成中文，
+    # 不是"原语种转录"）。英文音频→英文原文→下游 translate 阶段译成中文。
+    # 中文音频需要调用方传 language="zh-CN"（目前 pipeline 未做语种探测，后续可加）。
     transcript = await asr.transcribe(
         audio_path,
-        language="zh-CN",
+        language="en-US",
         on_progress=on_progress
     )
 

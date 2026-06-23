@@ -74,7 +74,7 @@ async def translate_segments(
     segments = transcript.segments
     total_batches = (len(segments) + batch_size - 1) // batch_size
 
-    async def translate_batch(batch: List, batch_idx: int) -> List[Dict]:
+    async def translate_batch(batch: List, batch_idx: int, skip_progress: bool = False) -> List[Dict]:
         async with semaphore:
             block = "\n".join(
                 f"{seg.id} | {seg.text_original}"
@@ -96,18 +96,20 @@ async def translate_segments(
 
                 translations = result.get("translations", [])
 
-                # 验证 ID 对齐
+                # 验证 ID 对齐。
+                # LLM 偶尔会漏掉 1-2 个 id（token 限制或疏忽）。之前用严格 != 整批丢弃，
+                # 导致大部分批次全废、翻译几乎为空。改为只警告、保留已有的部分翻译，
+                # 下游（pipeline 的 merge / apply_translations）按 id 合并，缺的 segment
+                # 保持未翻译。
                 input_ids = {seg.id for seg in batch}
-                output_ids = {t["id"] for t in translations}
-
-                if input_ids != output_ids:
+                output_ids = {t.get("id") for t in translations if t.get("id") is not None}
+                missing = input_ids - output_ids
+                if missing:
                     logger.warning(
-                        f"Batch {batch_idx}: ID mismatch - input: {input_ids}, output: {output_ids}"
+                        f"Batch {batch_idx}: LLM 漏掉 {len(missing)} 个 id（保留其余 {len(output_ids & input_ids)} 条）"
                     )
-                    # 返回空结果，触发降级
-                    return []
 
-                if progress_cb:
+                if progress_cb and not skip_progress:
                     progress_cb((batch_idx + 1) / total_batches)
 
                 return translations
@@ -129,6 +131,46 @@ async def translate_segments(
     translations = []
     for batch_result in results:
         translations.extend(batch_result)
+
+    # === 补漏 pass ===
+    # LLM 偶尔会漏掉几个 id（token 限制或疏忽），主流程只警告不重试，
+    # 导致最终 transcript 出现零星未翻译 segment（如 1973/1980）。
+    # 这里收集所有缺失的 segment，用更小的 batch 重试，仍失败的逐个兜底。
+    # 这是"缺 X 个 segment"问题的根治方案。
+    all_ids = {s.id for s in segments}
+
+    async def _fill(missing_segs: List, batch_sz: int) -> None:
+        if not missing_segs:
+            return
+        batches = [
+            (missing_segs[i:i + batch_sz], i // batch_sz)
+            for i in range(0, len(missing_segs), batch_sz)
+        ]
+        res = await asyncio.gather(*[
+            translate_batch(b, idx, skip_progress=True) for b, idx in batches
+        ])
+        for r in res:
+            translations.extend(r)
+
+    def _missing() -> List:
+        done = {t.get("id") for t in translations if t.get("id") is not None}
+        return [s for s in segments if s.id not in done]
+
+    after_main = _missing()
+    if after_main:
+        logger.info(f"[fill] 主流程漏 {len(after_main)} 个，用 batch=4 补翻")
+        await _fill(after_main, 4)
+        still = _missing()
+        if still:
+            logger.info(f"[fill] 仍漏 {len(still)} 个，逐个兜底")
+            await _fill(still, 1)
+        done = {t.get("id") for t in translations if t.get("id") is not None}
+        covered = len(done & all_ids)
+        miss_ids = sorted(all_ids - done)
+        logger.info(
+            f"[fill] 最终覆盖率 {covered}/{len(all_ids)} ({covered / len(all_ids):.2%})，"
+            f"仍缺 {len(miss_ids)} 个{(' id=' + str(miss_ids[:20])) if miss_ids else ''}"
+        )
 
     logger.info(f"Translation completed: {len(translations)} segments")
 

@@ -104,10 +104,11 @@ class Settings:
             "transcribe": 20,
             "chapterize": 10,
             "summarize": 17,
+            "translate": 0,  # 可选阶段（仅 language != "zh" 触发），不计入总进度
             "highlight": 18,
             "product_insights": 15,
         }
-        self.stage_order = ["download", "transcribe", "chapterize", "summarize", "highlight", "product_insights"]
+        self.stage_order = ["download", "transcribe", "chapterize", "summarize", "translate", "highlight", "product_insights"]
 
         # ==================== 日志 ====================
         self.log_level = os.getenv("PODCAST_DIGESTER_LOG_LEVEL", "INFO")
@@ -311,6 +312,7 @@ STAGE_NAMES = {
     "transcribe": "转录",
     "chapterize": "分章",
     "summarize": "摘要",
+    "translate": "翻译",
     "highlight": "亮点",
     "product_insights": "产品洞察",
     "done": "完成",
