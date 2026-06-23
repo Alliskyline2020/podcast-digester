@@ -269,6 +269,23 @@
             font-style: italic;
         }
 
+        .highlight-group {
+            margin-bottom: 20px;
+        }
+
+        .highlight-group:last-child {
+            margin-bottom: 0;
+        }
+
+        .highlight-group-title {
+            font-size: 15px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+            padding-bottom: 4px;
+            border-bottom: 1px solid var(--border);
+        }
+
         .insight-group {
             margin-bottom: 24px;
         }
@@ -376,40 +393,20 @@
         </section>
         {% endif %}
 
-        {% if highlights %}
+        {% if highlight_groups %}
         <section class="section">
             <h2>洞察金句</h2>
-            <div class="highlights">
-                {% for highlight in highlights %}
-                <div class="highlight-card">
-                  <div class="highlight-header">
-                    <span class="kind">{{ highlight.kind_label }}</span>
-                    {% if highlight.start_time %}
-                    <span class="time">⏱ {{ highlight.start_time }}</span>
-                    {% endif %}
-                  </div>
-                  <p class="text">{{ highlight.text_zh }}</p>
-                  <p class="why">{{ highlight.why_zh }}</p>
-                </div>
-                {% endfor %}
-            </div>
-        </section>
-        {% endif %}
-
-        {% if has_product_insights %}
-        <section class="section">
-            <h2>产品与技术洞察</h2>
-            {% for group in product_insight_groups %}
-            <div class="insight-group">
-                <h3>{{ group.icon }} {{ group.label }}</h3>
-                <div class="insights">
-                    {% for item in group.insights %}
-                    <div class="insight-card-export">
-                        <span class="category-tag">{{ item.category_label }}</span>
-                        <p class="text">{{ item.text_zh }}</p>
-                        {% if item.rationale_zh %}
-                        <p class="why">{{ item.rationale_zh }}</p>
-                        {% endif %}
+            {% for group in highlight_groups %}
+            <div class="highlight-group">
+                <h3 class="highlight-group-title">{{ group.label }}</h3>
+                <div class="highlights">
+                    {% for highlight in group.entries %}
+                    <div class="highlight-card">
+                      {% if highlight.start_time %}
+                      <span class="time">⏱ {{ highlight.start_time }}</span>
+                      {% endif %}
+                      <p class="text">{{ highlight.text_zh }}</p>
+                      <p class="why">{{ highlight.why_zh }}</p>
                     </div>
                     {% endfor %}
                 </div>
@@ -437,6 +434,28 @@
                     {% endfor %}
                 </ul>
                 {% endif %}
+            </div>
+            {% endfor %}
+        </section>
+        {% endif %}
+
+        {% if has_product_insights %}
+        <section class="section">
+            <h2>产品与技术洞察</h2>
+            {% for group in product_insight_groups %}
+            <div class="insight-group">
+                <h3>{{ group.icon }} {{ group.label }}</h3>
+                <div class="insights">
+                    {% for item in group.insights %}
+                    <div class="insight-card-export">
+                        <span class="category-tag">{{ item.category_label }}</span>
+                        <p class="text">{{ item.text_zh }}</p>
+                        {% if item.rationale_zh %}
+                        <p class="why">{{ item.rationale_zh }}</p>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                </div>
             </div>
             {% endfor %}
         </section>

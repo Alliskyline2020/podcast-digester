@@ -118,6 +118,22 @@ def render_html_template(
                 'start_time': start_time
             })
 
+        # 按 kind 分组（固定顺序：金句/洞察/事实/反常识/故事），导出按类别排列
+        _KIND_ORDER = ['quote', 'insight', 'fact', 'contrarian', 'story']
+        _groups_map = {}
+        for hl in highlight_list:
+            k = hl.get('kind') or 'insight'
+            _groups_map.setdefault(k, []).append(hl)
+        highlight_groups = []
+        for _k in _KIND_ORDER:
+            if _k in _groups_map:
+                highlight_groups.append({
+                    'label': _get_kind_label(_k),
+                    'entries': _groups_map.pop(_k),  # 'entries' 避免 jinja2 dict.items 冲突
+                })
+        for _k, _items in _groups_map.items():
+            highlight_groups.append({'label': _get_kind_label(_k) or _k, 'entries': _items})
+
         # 处理产品/技术/市场洞察（兼容旧 list[str] 和新结构化 shape）
         product_insight_groups = _build_product_insight_groups(
             episode_data.get('product_insights') or {}
@@ -134,6 +150,7 @@ def render_html_template(
             'chapters': chapter_list,
             'summaries': summary_list,
             'highlights': highlight_list,
+            'highlight_groups': highlight_groups,
             'product_insight_groups': product_insight_groups,
             'has_product_insights': len(product_insight_groups) > 0,
             'theme': theme,
@@ -163,7 +180,7 @@ def _get_kind_label(kind: str) -> str:
         'quote': '💬 金句',
         'insight': '💡 洞察',
         'fact': '📊 事实',
-        'contrarian': '🔥 反观点',
+        'contrarian': '🔥 反常识',
         'story': '📖 故事'
     }
     return labels.get(kind, kind)
