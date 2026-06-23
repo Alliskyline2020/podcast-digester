@@ -216,7 +216,7 @@ async def load_episode_bundle(episode_id: str) -> EpisodeBundle:
     if episode.paragraph_mappings:
         logger.debug(f"episode.paragraph_mappings length = {len(episode.paragraph_mappings)}")
 
-    # 加载 transcript - 从数据库读取
+    # 加载 transcript - 优先数据库，回退到 transcript.json 文件
     transcript = None
     transcript_json = ep_data.get("transcript")
     if transcript_json:
@@ -238,7 +238,30 @@ async def load_episode_bundle(episode_id: str) -> EpisodeBundle:
                 segments=cleaned_segments,
             )
         except Exception as e:
-            logger.debug(f"[Load Bundle] transcript load skipped: {e}")
+            logger.debug(f"[Load Bundle] transcript DB load failed: {e}")
+
+    # DB 无 transcript 时回退到文件系统（pipeline 的 checkpoint 落盘）
+    if transcript is None:
+        transcript_file = deps.data_dir / "media" / episode_id / "transcript.json"
+        if transcript_file.exists():
+            try:
+                transcript_data = safe_read_json(transcript_file)
+                if transcript_data and transcript_data.get("segments"):
+                    cleaned_segments = []
+                    for seg_dict in transcript_data.get("segments", []):
+                        text_with_punct = seg_dict.get("text_with_punct")
+                        if text_with_punct:
+                            seg_dict["text_with_punct"] = _clean_segment_text(text_with_punct)
+                        seg_dict["text_original"] = _clean_segment_text(seg_dict.get("text_original", ""))
+                        cleaned_segments.append(Segment(**seg_dict))
+                    transcript = Transcript(
+                        episode_id=episode_id,
+                        language=transcript_data.get("language", "unknown"),
+                        segments=cleaned_segments,
+                    )
+                    logger.debug(f"[Load Bundle] transcript loaded from file: {len(cleaned_segments)} segments")
+            except Exception as e:
+                logger.debug(f"[Load Bundle] transcript file load failed: {e}")
 
     # 加载 outline - 从数据库读取，失败时回退到文件系统
     outline = None
