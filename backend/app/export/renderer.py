@@ -94,6 +94,51 @@ async def render_png_from_html(
         raise RuntimeError(f"PNG rendering failed: {e}")
 
 
+async def render_pdf_from_html(
+    html_content: str,
+    output_path: Path,
+    timeout: int = 30000
+) -> Path:
+    """
+    将HTML渲染为PDF（用 Playwright 的 page.pdf()）
+
+    相比 PNG 长图，PDF 是矢量格式、文字可选可搜索、体积更小，
+    适合打印和归档。布局由 HTML 模板控制，A4 纸张带页边距。
+
+    Args:
+        html_content: HTML 字符串
+        output_path: 输出 PDF 文件路径
+        timeout: 超时（毫秒）
+
+    Returns:
+        生成的 PDF 文件路径
+    """
+    try:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        browser = await _get_browser()
+        page = await browser.new_page()
+        try:
+            await page.set_content(html_content, wait_until='networkidle', timeout=timeout)
+            await page.wait_for_load_state('networkidle', timeout=timeout)
+            # 强制 screen 媒体，让模板的浅色/深色样式生效（默认 pdf 走 print）
+            await page.emulate_media(media='screen')
+            await page.pdf(
+                path=str(output_path),
+                print_background=True,
+                format='A4',
+                margin={'top': '16mm', 'bottom': '16mm', 'left': '12mm', 'right': '12mm'},
+            )
+            logger.info(f"PDF rendered successfully: {output_path}")
+            return output_path
+        finally:
+            await page.close()
+    except Exception as e:
+        logger.error(f"Failed to render PDF: {e}")
+        if output_path.exists():
+            output_path.unlink()
+        raise RuntimeError(f"PDF rendering failed: {e}")
+
+
 async def cleanup_browser():
     """清理浏览器实例（用于关闭时）"""
     global _browser

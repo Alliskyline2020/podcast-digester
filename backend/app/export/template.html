@@ -269,6 +269,58 @@
             font-style: italic;
         }
 
+        .insight-group {
+            margin-bottom: 24px;
+        }
+
+        .insight-group:last-child {
+            margin-bottom: 0;
+        }
+
+        .insight-group h3 {
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 12px;
+        }
+
+        .insights {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .insight-card-export {
+            padding: 16px 20px;
+            background: var(--bg-secondary);
+            border-radius: 12px;
+            border-left: 3px solid var(--accent);
+        }
+
+        .category-tag {
+            display: inline-block;
+            font-size: 11px;
+            font-weight: 600;
+            padding: 2px 10px;
+            background: var(--accent-light);
+            color: var(--accent);
+            border-radius: 10px;
+            margin-bottom: 8px;
+        }
+
+        .insight-card-export .text {
+            font-size: 15px;
+            line-height: 1.6;
+            color: var(--text-primary);
+            margin-bottom: 4px;
+        }
+
+        .insight-card-export .why {
+            font-size: 13px;
+            color: var(--text-secondary);
+            font-style: italic;
+        }
+
         .card-footer {
             margin-top: 60px;
             padding: 30px 0;
@@ -341,6 +393,28 @@
                 </div>
                 {% endfor %}
             </div>
+        </section>
+        {% endif %}
+
+        {% if has_product_insights %}
+        <section class="section">
+            <h2>产品与技术洞察</h2>
+            {% for group in product_insight_groups %}
+            <div class="insight-group">
+                <h3>{{ group.icon }} {{ group.label }}</h3>
+                <div class="insights">
+                    {% for item in group.insights %}
+                    <div class="insight-card-export">
+                        <span class="category-tag">{{ item.category_label }}</span>
+                        <p class="text">{{ item.text_zh }}</p>
+                        {% if item.rationale_zh %}
+                        <p class="why">{{ item.rationale_zh }}</p>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endfor %}
         </section>
         {% endif %}
 

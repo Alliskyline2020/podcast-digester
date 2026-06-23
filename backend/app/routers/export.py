@@ -47,7 +47,7 @@ async def export_episode_summary(
     - PNG: 适合社交媒体分享的长图
     """
     # 速率限制由路由依赖 rate_limit(3, 60) 强制执行
-    from ..export import render_html_template, render_png_from_html
+    from ..export import render_html_template, render_png_from_html, render_pdf_from_html
 
     # 1. 加载节目数据（从文件系统）
     data_dir = DATA_DIR
@@ -105,12 +105,21 @@ async def export_episode_summary(
             highlights = highlight_data.highlights if highlight_data.highlights else []
             logger.info(f"Loaded {len(highlights)} highlights from highlight.json")
 
-    # 5. 准备导出数据
+    # 5. 加载产品/技术/市场洞察 (product_insights.json)
+    product_insights = None
+    insights_file = media_dir / "product_insights.json"
+    if insights_file.exists():
+        product_insights = safe_read_json(insights_file)
+        if product_insights:
+            logger.info("Loaded product_insights from product_insights.json")
+
+    # 6. 准备导出数据
     export_data = {
         'episode': episode,
         'chapters': chapters or [],
         'summaries': summaries or [],
         'highlights': highlights,
+        'product_insights': product_insights or {},
         'transcript': []  # 暂时不包含完整字幕
     }
 
@@ -161,6 +170,14 @@ async def export_episode_summary(
         download_url = f"/api/exports/{export_id}.png"
         file_size = png_file.stat().st_size
 
+    elif request.format == "pdf":
+        # 渲染PDF（矢量、文字可选、适合打印归档）
+        pdf_file = export_dir / f"{export_id}.pdf"
+        await render_pdf_from_html(html_content, pdf_file)
+
+        download_url = f"/api/exports/{export_id}.pdf"
+        file_size = pdf_file.stat().st_size
+
     else:
         raise HTTPException(status_code=400, detail=f"Unsupported format: {request.format}")
 
@@ -193,6 +210,8 @@ async def download_export(filename: str):
         media_type = 'text/html'
     elif filename.endswith('.png'):
         media_type = 'image/png'
+    elif filename.endswith('.pdf'):
+        media_type = 'application/pdf'
     else:
         media_type = 'application/octet-stream'
 
