@@ -87,6 +87,8 @@ data/*.db
 data/*.db-journal
 data/*.db-wal
 data/*.db-shm
+# backend/data/ 是 cwd=backend 时误生成的副本目录，应用实际用 ../data
+backend/data/
 
 # PID 文件
 .backend_pid
