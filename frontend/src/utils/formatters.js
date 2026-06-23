@@ -86,3 +86,49 @@ const HIGHLIGHT_KIND_LABEL = {
 export function getHighlightKindLabel(kind) {
   return HIGHLIGHT_KIND_LABEL[kind] || kind
 }
+
+const INSIGHT_CATEGORY_ICON = {
+  product_strategy: '🎯',
+  product_ux: '🎨',
+  product_growth: '📈',
+  product_positioning: '🧭',
+  tech_architecture: '🏗️',
+  tech_eng_practice: '🛠️',
+  tech_trend: '🔮',
+  tech_challenge: '⚠️',
+  market_trend: '📊',
+  market_competition: '⚔️',
+  market_business_model: '💰',
+  market_opportunity: '✨',
+  other: '💡',
+}
+
+const INSIGHT_CATEGORY_LABEL = {
+  product_strategy: '策略',
+  product_ux: '体验',
+  product_growth: '增长',
+  product_positioning: '定位',
+  tech_architecture: '架构',
+  tech_eng_practice: '工程实践',
+  tech_trend: '技术趋势',
+  tech_challenge: '技术挑战',
+  market_trend: '市场趋势',
+  market_competition: '竞争格局',
+  market_business_model: '商业模式',
+  market_opportunity: '机会点',
+  other: '其他',
+}
+
+/**
+ * 洞察细分维度 -> emoji 图标。
+ */
+export function getInsightCategoryIcon(category) {
+  return INSIGHT_CATEGORY_ICON[category] || '💡'
+}
+
+/**
+ * 洞察细分维度 -> 中文标签。
+ */
+export function getInsightCategoryLabel(category) {
+  return INSIGHT_CATEGORY_LABEL[category] || category
+}

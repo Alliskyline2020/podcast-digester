@@ -277,40 +277,70 @@
         <div v-show="activeTab === 'insights'" class="tab-content insights-tab" role="tabpanel" id="tabpanel-insights" aria-labelledby="tab-insights">
           <div v-if="productInsights" class="insights-content">
             <!-- 产品洞察 -->
-            <div v-if="productInsights.product_insights_zh?.length" class="insight-section">
+            <div v-if="productInsightsProduct.length" class="insight-section">
               <h3 class="insight-section-title">
                 <span class="section-icon">📦</span>
                 产品洞察
               </h3>
               <ul class="insight-list">
-                <li v-for="(item, idx) in productInsights.product_insights_zh" :key="'p-' + idx">
-                  {{ item }}
+                <li v-for="(item, idx) in productInsightsProduct" :key="'p-' + idx" class="insight-card">
+                  <div class="insight-card-header">
+                    <span class="insight-cat-icon">{{ getInsightCategoryIcon(item.category) }}</span>
+                    <span class="insight-cat-label">{{ getInsightCategoryLabel(item.category) }}</span>
+                    <span
+                      v-if="firstSegmentMs(item.cited_segment_ids) !== null"
+                      class="insight-time"
+                      @click="localSeekTo(firstSegmentMs(item.cited_segment_ids))"
+                    >⏱ {{ formatTime(firstSegmentMs(item.cited_segment_ids)) }}</span>
+                  </div>
+                  <p class="insight-text">{{ item.text_zh }}</p>
+                  <p v-if="item.rationale_zh" class="insight-rationale">{{ item.rationale_zh }}</p>
                 </li>
               </ul>
             </div>
 
             <!-- 技术洞察 -->
-            <div v-if="productInsights.technical_insights_zh?.length" class="insight-section">
+            <div v-if="productInsightsTechnical.length" class="insight-section">
               <h3 class="insight-section-title">
                 <span class="section-icon">⚙️</span>
                 技术洞察
               </h3>
               <ul class="insight-list">
-                <li v-for="(item, idx) in productInsights.technical_insights_zh" :key="'t-' + idx">
-                  {{ item }}
+                <li v-for="(item, idx) in productInsightsTechnical" :key="'t-' + idx" class="insight-card">
+                  <div class="insight-card-header">
+                    <span class="insight-cat-icon">{{ getInsightCategoryIcon(item.category) }}</span>
+                    <span class="insight-cat-label">{{ getInsightCategoryLabel(item.category) }}</span>
+                    <span
+                      v-if="firstSegmentMs(item.cited_segment_ids) !== null"
+                      class="insight-time"
+                      @click="localSeekTo(firstSegmentMs(item.cited_segment_ids))"
+                    >⏱ {{ formatTime(firstSegmentMs(item.cited_segment_ids)) }}</span>
+                  </div>
+                  <p class="insight-text">{{ item.text_zh }}</p>
+                  <p v-if="item.rationale_zh" class="insight-rationale">{{ item.rationale_zh }}</p>
                 </li>
               </ul>
             </div>
 
             <!-- 市场洞察 -->
-            <div v-if="productInsights.market_insights_zh?.length" class="insight-section">
+            <div v-if="productInsightsMarket.length" class="insight-section">
               <h3 class="insight-section-title">
                 <span class="section-icon">📊</span>
                 市场/行业洞察
               </h3>
               <ul class="insight-list">
-                <li v-for="(item, idx) in productInsights.market_insights_zh" :key="'m-' + idx">
-                  {{ item }}
+                <li v-for="(item, idx) in productInsightsMarket" :key="'m-' + idx" class="insight-card">
+                  <div class="insight-card-header">
+                    <span class="insight-cat-icon">{{ getInsightCategoryIcon(item.category) }}</span>
+                    <span class="insight-cat-label">{{ getInsightCategoryLabel(item.category) }}</span>
+                    <span
+                      v-if="firstSegmentMs(item.cited_segment_ids) !== null"
+                      class="insight-time"
+                      @click="localSeekTo(firstSegmentMs(item.cited_segment_ids))"
+                    >⏱ {{ formatTime(firstSegmentMs(item.cited_segment_ids)) }}</span>
+                  </div>
+                  <p class="insight-text">{{ item.text_zh }}</p>
+                  <p v-if="item.rationale_zh" class="insight-rationale">{{ item.rationale_zh }}</p>
                 </li>
               </ul>
             </div>
@@ -605,6 +635,16 @@ const paragraphs = computed(() => {
 const chapters = computed(() => bundle.value?.outline?.entries || [])
 const highlight = computed(() => bundle.value?.highlight)
 const productInsights = computed(() => bundle.value?.product_insights)
+const productInsightsProduct = computed(() => productInsights.value?.product?.items || [])
+const productInsightsTechnical = computed(() => productInsights.value?.technical?.items || [])
+const productInsightsMarket = computed(() => productInsights.value?.market?.items || [])
+
+// 把 cited_segment_ids[0] 映射到 segment 的 start_ms（用于点击洞察跳转到原音）
+const firstSegmentMs = (ids) => {
+  if (!ids?.length) return null
+  const seg = segments.value.find(s => s.id === ids[0])
+  return seg?.start_ms ?? null
+}
 
 const hasOriginal = computed(() => segments.value.length > 0)
 const hasTranslated = computed(() => segments.value.some(s => s.text_translated))
@@ -638,6 +678,8 @@ import {
   verdictText,
   getHighlightKind,
   getHighlightKindLabel,
+  getInsightCategoryIcon,
+  getInsightCategoryLabel,
 } from '@/utils/formatters'
 
 // 按类型分组亮点
@@ -1592,20 +1634,60 @@ onUnmounted(() => {
   gap: 8px;
 }
 
-.insight-list li {
+.insight-list li.insight-card {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 12px 14px;
   font-size: 14px;
   line-height: 1.6;
   color: #374151;
-  padding-left: 20px;
-  position: relative;
 }
 
-.insight-list li:before {
-  content: "•";
-  position: absolute;
-  left: 0;
+.insight-card-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.insight-cat-icon {
+  font-size: 15px;
+}
+
+.insight-cat-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #6b7280;
+  background: #f3f4f6;
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.insight-time {
+  margin-left: auto;
+  font-size: 12px;
   color: #3b82f6;
-  font-weight: bold;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: background 0.15s;
+}
+
+.insight-time:hover {
+  background: #eff6ff;
+}
+
+.insight-text {
+  margin: 0 0 4px 0;
+  color: #1f2937;
+}
+
+.insight-rationale {
+  margin: 0;
+  font-size: 12px;
+  color: #6b7280;
+  font-style: italic;
 }
 
 .insight-tags {
