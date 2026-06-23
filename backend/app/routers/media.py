@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 from fastapi import APIRouter, HTTPException, Request, Response
+from starlette.responses import StreamingResponse
 
 from .. import deps
 
@@ -104,14 +105,15 @@ async def serve_audio_with_range(file_path: Path, request: Request) -> Response:
             )
 
     # 不支持 Range 或 Range 解析失败，返回整个文件
-    # 对于大文件，使用流式传输
+    # 对于大文件，使用流式传输（必须用 StreamingResponse：
+    # 普通 Response 不接受 async generator 作为 content）
     async def file_iterator():
         with open(file_path, "rb") as f:
             while chunk := f.read(8192):
                 yield chunk
 
-    return Response(
-        content=file_iterator(),
+    return StreamingResponse(
+        file_iterator(),
         status_code=200,
         headers={
             "Content-Type": content_type,

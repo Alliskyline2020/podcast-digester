@@ -67,66 +67,19 @@ logger = logging.getLogger(__name__)
 # .services.background_tasks，均已通过顶部 import 引入。
 
 # ==================== 数据传输对象 ====================
-
-class ListEpisodesResponse(BaseModel):
-    """节目列表响应"""
-    episodes: list[EpisodeCard]
-
-
-class EpisodeResponse(BaseModel):
-    """节目详情响应"""
-    episode: EpisodeBundle
-
-
-class DeleteResponse(BaseModel):
-    """删除响应"""
-    ok: bool = True
-    deleted: str
-
+#
+# 业务响应/请求模型已随路由迁移到各自 router，main.py 不再持有副本：
+# - ListEpisodesResponse / EpisodeResponse / DeleteResponse / CancelResponse
+#   / GenerateInsightsResponse  → routers/episodes.py
+# - SyncSubtitlesResponse / CorrectTranscriptResponse / UpdateSegmentRequest
+#   / UpdateSegmentResponse / InsightExtractionResponse → routers/subtitles.py
+# 这里仅保留 main.py 自身路由（/health）用到的模型。
 
 class HealthResponse(BaseModel):
     """健康检查响应"""
     name: str
     version: str
     status: str
-
-
-class SyncSubtitlesResponse(BaseModel):
-    """字幕同步响应"""
-    episode_id: str
-    paragraph_count: int
-    paragraph_mappings: list
-    segment_count: int
-
-
-# BatchSyncRequest / BatchSyncResponse 已迁移到 routers/admin.py
-
-
-class CorrectTranscriptResponse(BaseModel):
-    """字幕纠错响应"""
-    episode_id: str
-    total_segments: int
-    corrected_segments: int
-    duration_ms: int
-
-
-class UpdateSegmentRequest(BaseModel):
-    """更新字幕segment请求"""
-    segment_index: int
-    text_original: str
-    note_to_glossary: bool = False
-
-
-class UpdateSegmentResponse(BaseModel):
-    """更新字幕segment响应"""
-    success: bool
-    segment_index: int
-    old_text: str
-    new_text: str
-    added_to_glossary: bool
-
-
-# GlossaryEntry / GlossaryResponse 已迁移到 routers/glossary.py
 
 
 # ==================== 应用初始化 ====================
@@ -160,11 +113,13 @@ app.add_middleware(WriteAuthMiddleware)
 
 
 # ==================== 支持 Range 请求的音频服务 ====================
-# 已迁移到 routers/media.py
+# 音频服务由 routers/media.py 提供（支持 HTTP Range，浏览器 seek 依赖此）。
+# 注意：不要在此处 app.mount("/media", StaticFiles(...)) —— Starlette 按注册顺序
+# 匹配路由，Mount 在 /media 前缀上会先于 router 的 /media/{id}/audio.* 命中，
+# 而 StaticFiles 不处理 Range，会导致 <audio> 无法 seek。
+app.include_router(media_router.router)
 
 
-# 其他静态文件仍然使用 StaticFiles
-app.mount("/media", StaticFiles(directory=str(data_dir / "media")), name="media")
 # fixtures 目录可能不存在，仅在存在时挂载
 fixtures_dir = data_dir / "fixtures"
 if fixtures_dir.exists():
@@ -174,7 +129,7 @@ if fixtures_dir.exists():
 # ==================== Routers ====================
 # 各业务 router 在 routers/<name>.py 中定义，main.py 仅负责装载。
 app.include_router(glossary_router.router)
-app.include_router(media_router.router)
+# media_router 已在上方音频服务区块注册（需早于任何 /media 的 StaticFiles mount）
 app.include_router(admin_router.router)
 app.include_router(export_router.router)
 app.include_router(subtitles_router.router)
@@ -262,39 +217,8 @@ async def health():
 
 
 # ==================== 核心 API ====================
-
-class CancelResponse(BaseModel):
-    """取消响应"""
-    ok: bool = True
-    cancelled: str
-    message: str = ""
-
-
-class ResumeRequest(BaseModel):
-    """恢复请求"""
-    raw_input: Optional[str] = Field(None, description="原始 URL 或文件路径（可选，不提供则从数据库读取）")
-
-
-class ResumeResponse(BaseModel):
-    """恢复响应"""
-    ok: bool = True
-    episode_id: str
-    message: str = "任务已恢复"
-
-
-class GenerateInsightsResponse(BaseModel):
-    """生成洞察响应"""
-    ok: bool = True
-    episode_id: str
-    message: str = "产品洞察生成完成"
-
-
-class InsightExtractionResponse(BaseModel):
-    """金句提取响应"""
-    episode_id: str
-    insights: List[Dict[str, Any]] = Field(default_factory=list, description="提取的金句列表")
-    llm_processed: bool = True
-    error: Optional[str] = None
+# CancelResponse / GenerateInsightsResponse / InsightExtractionResponse
+# 已迁移到 routers/episodes.py 与 routers/subtitles.py。
 
 
 # ==================== LLM 智能字幕处理 ====================

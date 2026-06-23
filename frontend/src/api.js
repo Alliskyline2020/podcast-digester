@@ -126,7 +126,8 @@ export async function cancelEpisode(episodeId) {
 /**
  * 恢复失败的任务
  */
-export async function resumeEpisode(episodeId, rawInput) {
+export async function resumeEpisode(episodeId, rawInput = null) {
+  // raw_input 为 null 时，后端从 source 表读取原始 URL，前端无需再问用户要链接
   const res = await fetchWithTimeout(`${API_BASE}/episode/${episodeId}/resume`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

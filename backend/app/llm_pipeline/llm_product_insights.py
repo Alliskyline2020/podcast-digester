@@ -90,7 +90,7 @@ async def extract_product_insights(
 async def run_product_insights_stage(
     episode_id: str,
     data_dir: Path,
-    on_progress: Optional[Callable[[float], None]] = None,
+    progress_cb: Optional[Callable[[float], None]] = None,
 ) -> ProductInsights:
     """
     运行产品洞察生成阶段
@@ -98,7 +98,7 @@ async def run_product_insights_stage(
     Args:
         episode_id: 节目 ID
         data_dir: 数据目录
-        on_progress: 进度回调
+        progress_cb: 进度回调
 
     Returns:
         ProductInsights 对象
@@ -133,7 +133,7 @@ async def run_product_insights_stage(
         chapters=outline_data.get("entries", []),
         summaries=summaries_data,
         transcript=transcript,
-        progress_cb=on_progress,
+        progress_cb=progress_cb,
     )
 
     # 保存结果

@@ -78,7 +78,7 @@ class CancelResponse(BaseModel):
 
 class ResumeRequest(BaseModel):
     """恢复请求"""
-    raw_input: str = Field(..., description="原始输入")
+    raw_input: Optional[str] = Field(None, description="原始输入（可选；不提供则从 source 表读取）")
 
 
 class ResumeResponse(BaseModel):
@@ -383,8 +383,9 @@ async def cancel_episode(episode_id: str) -> CancelResponse:
         )
         logger.info(f"Episode {episode_id} (pending) marked as cancelled")
         return CancelResponse(
-            cancelled=episode_id,
-            message="任务已取消"
+            success=True,
+            episode_id=episode_id,
+            status=EpisodeStatus.FAILED.value,
         )
 
     # 对于正在运行的任务，尝试取消
@@ -401,8 +402,9 @@ async def cancel_episode(episode_id: str) -> CancelResponse:
         logger.info(f"Episode {episode_id} cancelled successfully")
 
         return CancelResponse(
-            cancelled=episode_id,
-            message="任务已取消"
+            success=True,
+            episode_id=episode_id,
+            status=EpisodeStatus.FAILED.value,
         )
     else:
         # 任务可能已经完成或失败，刷新状态
@@ -412,8 +414,9 @@ async def cancel_episode(episode_id: str) -> CancelResponse:
             error_msg="任务已取消",
         )
         return CancelResponse(
-            cancelled=episode_id,
-            message="任务已取消"
+            success=True,
+            episode_id=episode_id,
+            status=EpisodeStatus.FAILED.value,
         )
 
 
@@ -444,48 +447,48 @@ async def resume_episode(episode_id: str, request: ResumeRequest) -> ResumeRespo
             detail=f"只能恢复失败或完成的任务，当前状态：{status}"
         )
 
-    # 获取原始输入（从请求或数据库）
+    # 获取原始输入：请求体 > source 表 > usage_log（paste 一定写过）
     raw_input = request.raw_input
     if not raw_input:
-        # 从source表读取原始URL
         from ..database import SourceRepository
         source_data = await SourceRepository.get_by_episode(episode_id)
-        if not source_data:
-            raise HTTPException(
-                status_code=400,
-                detail="找不到原始URL，请提供raw_input参数"
-            )
-        raw_input = source_data.get("raw_input")
-        logger.info(f"从数据库恢复原始URL: {raw_input}")
-
-    # 检查是否有任何已完成的文件
-    media_dir = deps.data_dir / "media" / episode_id
-    has_any_file = any([
-        (media_dir / "transcript.json").exists(),
-        (media_dir / "outline.json").exists(),
-        (media_dir / "summaries.json").exists(),
-        (media_dir / "highlight.json").exists(),
-    ])
-
-    if not has_any_file and status != "ready":
-        raise HTTPException(
-            status_code=400,
-            detail="没有可恢复的中间文件，请重新提交"
-        )
+        if source_data:
+            raw_input = source_data.get("raw_input")
+            logger.info(f"从 source 表恢复原始URL: {raw_input}")
+        else:
+            # 早期失败的任务可能 pipeline 还没来得及写 source 表，
+            # 回退到 usage_log（paste 一定写过 raw_input）
+            async with aiosqlite.connect(DB_PATH) as db:
+                async with db.execute(
+                    "SELECT payload_json FROM usage_log "
+                    "WHERE episode_id = ? AND event_type = 'paste' "
+                    "ORDER BY ts DESC LIMIT 1",
+                    (episode_id,),
+                ) as cursor:
+                    row = await cursor.fetchone()
+                    if row:
+                        raw_input = row[0]
+                        logger.info(f"从 usage_log 恢复原始URL: {raw_input}")
+            if not raw_input:
+                raise HTTPException(
+                    status_code=400,
+                    detail="找不到原始URL，请提供raw_input参数"
+                )
 
     # 标记状态为处理中
     await EpisodeRepository.update_status(episode_id, EpisodeStatus.PENDING)
 
     # 在后台启动恢复任务
     async def run_resume():
+        from ..pipeline import pipeline as audio_pipeline
         try:
-            await pipeline.resume_episode(
+            await audio_pipeline.resume_episode(
                 episode_id,
-                raw_input,  # 使用从数据库获取的URL
+                raw_input,  # 使用从 source 表/usage_log 获取的 URL
                 on_progress=lambda sid, prog, overall: None,
             )
         except Exception as e:
-            logger.error(f"Resume failed for {episode_id}: {e}")
+            logger.exception(f"Resume failed for {episode_id}: {e}")
             await EpisodeRepository.update_status(
                 episode_id,
                 EpisodeStatus.FAILED,
@@ -498,8 +501,9 @@ async def resume_episode(episode_id: str, request: ResumeRequest) -> ResumeRespo
     logger.info(f"Episode {episode_id} resume started")
 
     return ResumeResponse(
+        success=True,
         episode_id=episode_id,
-        message="任务已恢复，正在后台处理"
+        status=EpisodeStatus.PENDING.value,
     )
 
 
