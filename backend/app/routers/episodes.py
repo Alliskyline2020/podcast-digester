@@ -26,15 +26,18 @@ from ..config import DB_PATH, settings
 from ..database import EpisodeRepository, UsageLogRepository
 from ..ingest import run_ingest
 from ..models import (
+    ConfidenceType,
     EpisodeBundle,
     EpisodeCard,
-    EpisodeStatus,
     Episode,
+    EpisodeStatus,
     PasteRequest,
     PasteResponse,
     PlayRequest,
     PlayResponse,
     ProductInsights,
+    StageInfo,
+    VerdictType,
 )
 from ..rate_limit import rate_limit
 from ..services.background_tasks import create_background_task
@@ -221,8 +224,12 @@ async def list_episodes() -> ListEpisodesResponse:
 
         if highlight:
             card.tldr_zh = highlight.get("tldr_zh")
-            card.worth_listening_verdict = highlight.get("worth_listening_verdict")
-            card.verdict_confidence = highlight.get("verdict_confidence")
+            # highlight 来自 load_highlight_fast（raw dict），verdict/confidence 是 str；
+            # 显式转 enum，避免 FastAPI 序列化 enum 字段收到 str 触发 pydantic 警告
+            verdict_raw = highlight.get("worth_listening_verdict")
+            card.worth_listening_verdict = VerdictType(verdict_raw) if verdict_raw else None
+            confidence_raw = highlight.get("verdict_confidence")
+            card.verdict_confidence = ConfidenceType(confidence_raw) if confidence_raw else None
             card.target_audience_zh = highlight.get("target_audience_zh")
             card.highlights_count = len(highlight.get("highlights", []))
 
@@ -233,7 +240,7 @@ async def list_episodes() -> ListEpisodesResponse:
         if card.id in progress_cache:
             progress_info = progress_cache[card.id]
             card.current_stage = progress_info.get("current_stage")
-            card.stages = progress_info.get("stages", [])
+            card.stages = [StageInfo(**s) for s in progress_info.get("stages", [])]
             card.overall_progress = progress_info.get("overall_progress", 0.0)
 
         episodes.append(card)
