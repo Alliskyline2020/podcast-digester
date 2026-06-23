@@ -87,7 +87,7 @@
     </transition>
 
     <!-- 主内容区 - 两栏布局 -->
-    <main class="player-main">
+    <main class="player-main" :style="{ '--left-width': leftPanelWidth + 'px' }">
       <!-- 左栏：章节 + 摘要 -->
       <aside class="chapters-panel">
         <h2 class="panel-title">章节</h2>
@@ -132,6 +132,9 @@
           </div>
         </div>
       </aside>
+
+      <!-- 左右栏拖拽分隔条 -->
+      <div class="panel-resizer" @mousedown="startResize" title="拖动调整宽度"></div>
 
       <!-- 右栏：Tab 切换 -->
       <section class="content-tabs">
@@ -508,6 +511,30 @@ const {
   onAudioSeeked,
 } = useAudioPlayback({ seekTo, audioRef })
 const subtitleLang = ref('original')
+// 左栏宽度（可拖拽调整），通过 CSS 变量 --left-width 驱动 grid 第一列宽
+const leftPanelWidth = ref(320)
+const startResize = (e) => {
+  e.preventDefault()
+  const startX = e.clientX
+  const startWidth = leftPanelWidth.value
+  const mainEl = e.currentTarget.parentElement
+  const mainRect = mainEl.getBoundingClientRect()
+  const onMove = (ev) => {
+    // 限制 240 ~ (mainWidth - 400)，避免左栏过窄或右栏被挤没
+    const w = Math.max(240, Math.min(mainRect.width - 400, startWidth + ev.clientX - startX))
+    leftPanelWidth.value = w
+  }
+  const onUp = () => {
+    document.removeEventListener('mousemove', onMove)
+    document.removeEventListener('mouseup', onUp)
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+  }
+  document.addEventListener('mousemove', onMove)
+  document.addEventListener('mouseup', onUp)
+  document.body.style.cursor = 'col-resize'
+  document.body.style.userSelect = 'none'
+}
 const expandedChapter = ref(-1)
 const showExportModal = ref(false)
 // 调浏览器原生打印对话框（用户选"保存为 PDF"即可导出），
@@ -1037,13 +1064,27 @@ onUnmounted(() => {
 .player-main {
   flex: 1;
   display: grid;
-  grid-template-columns: 320px minmax(0, 1fr);
+  grid-template-columns: var(--left-width, 320px) 6px minmax(0, 1fr);
   gap: 20px;
   padding: 20px;
   max-width: 1600px;
   margin: 0 auto;
   width: 100%;
   overflow: hidden;
+}
+
+/* 左右栏拖拽分隔条 */
+.panel-resizer {
+  width: 6px;
+  cursor: col-resize;
+  background: transparent;
+  z-index: 10;
+  transition: background 0.15s;
+}
+
+.panel-resizer:hover,
+.panel-resizer:active {
+  background: rgba(59, 130, 246, 0.3);
 }
 
 /* 左栏：章节面板 */
@@ -1881,7 +1922,7 @@ onUnmounted(() => {
 /* 响应式 */
 @media (max-width: 1024px) {
   .player-main {
-    grid-template-columns: 280px minmax(0, 1fr);
+    grid-template-columns: var(--left-width, 280px) 6px minmax(0, 1fr);
     gap: 16px;
     padding: 16px;
   }
@@ -1897,6 +1938,10 @@ onUnmounted(() => {
     grid-template-columns: 1fr;
     padding: 12px;
     padding-bottom: 80px;
+  }
+
+  .panel-resizer {
+    display: none;
   }
 
   .chapters-panel {
