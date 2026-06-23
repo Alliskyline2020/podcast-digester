@@ -92,6 +92,14 @@ class Settings:
         self.llm_highlight_max_segments = int(os.getenv("PODCAST_DIGESTER_LLM_MAX_SEGMENTS", "900"))
         self.llm_max_input_length = int(os.getenv("PODCAST_DIGESTER_MAX_INPUT_LENGTH", "200000"))
 
+        # ==================== 洞察质量控制 ====================
+        # highlight verify pass（二次 LLM 审核 keep/drop）+ top-k 截断
+        self.llm_highlight_verify_enabled = os.getenv("PODCAST_DIGESTER_HIGHLIGHT_VERIFY_ENABLED", "true").lower() == "true"
+        self.llm_highlight_top_k = int(os.getenv("PODCAST_DIGESTER_HIGHLIGHT_TOP_K", "10"))
+        # product/technical/market insights verify + 每 domain top-k
+        self.llm_insights_verify_enabled = os.getenv("PODCAST_DIGESTER_INSIGHTS_VERIFY_ENABLED", "true").lower() == "true"
+        self.llm_insights_top_k = int(os.getenv("PODCAST_DIGESTER_INSIGHTS_TOP_K", "5"))
+
         # ==================== 性能和重试 ====================
         self.http_timeout_seconds = int(os.getenv("PODCAST_DIGESTER_HTTP_TIMEOUT", "30"))
         self.max_retries = int(os.getenv("PODCAST_DIGESTER_MAX_RETRIES", "3"))
@@ -305,6 +313,12 @@ LLM_TRANSLATE_BATCH_SIZE = settings.llm_translate_batch_size
 LLM_SPLIT_WINDOW_SIZE = settings.llm_split_window_size
 LLM_HIGHLIGHT_MAX_SEGMENTS = settings.llm_highlight_max_segments
 LLM_MAX_INPUT_LENGTH = settings.llm_max_input_length
+
+# 洞察质量控制（向后兼容导出）
+LLM_HIGHLIGHT_VERIFY_ENABLED = settings.llm_highlight_verify_enabled
+LLM_HIGHLIGHT_TOP_K = settings.llm_highlight_top_k
+LLM_INSIGHTS_VERIFY_ENABLED = settings.llm_insights_verify_enabled
+LLM_INSIGHTS_TOP_K = settings.llm_insights_top_k
 
 # 阶段配置（向后兼容）
 STAGE_NAMES = {

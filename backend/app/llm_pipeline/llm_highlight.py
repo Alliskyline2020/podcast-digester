@@ -10,7 +10,12 @@
 import logging
 from typing import List, Dict, Any, Optional, TYPE_CHECKING
 from ..llm import chat_json
-from ..prompts import HIGHLIGHT_SYSTEM, build_highlight_user
+from ..prompts import (
+    HIGHLIGHT_SYSTEM,
+    HIGHLIGHT_VERIFY_SYSTEM,
+    build_highlight_user,
+    build_highlight_verify_user,
+)
 from ..models import HighlightCard, HighlightItem, VerdictType, ConfidenceType, HighlightKind
 
 if TYPE_CHECKING:
@@ -52,7 +57,7 @@ async def extract_highlights(
     # 选择内容最密集的章节获取原始字幕
     from ..config import LLM_HIGHLIGHT_MAX_SEGMENTS
     dense_chapter_ids = _get_densest_chapters(chapters, transcript, max_chapters=8)
-    raw_block = _build_raw_transcript(transcript, dense_chapter_ids, max_segments=LLM_HIGHLIGHT_MAX_SEGMENTS)
+    raw_block = _build_raw_transcript(transcript, dense_chapter_ids, chapters, max_segments=LLM_HIGHLIGHT_MAX_SEGMENTS)
 
     user_input = build_highlight_user(
         title, duration_min, outline_block, summaries_block, raw_block
@@ -105,6 +110,17 @@ async def extract_highlights(
             except Exception as e:
                 logger.warning(f"Skipped invalid highlight item: {h}, error: {e}")
 
+        # verify pass：二次 LLM 审核 keep/drop，失败优雅降级（keep all）
+        from ..config import LLM_HIGHLIGHT_VERIFY_ENABLED, LLM_HIGHLIGHT_TOP_K
+        if LLM_HIGHLIGHT_VERIFY_ENABLED and valid_highlights:
+            if progress_cb:
+                progress_cb(0.85)
+            valid_highlights = await _verify_highlights(valid_highlights, transcript)
+
+        # top-k 截断（保留 LLM 原始顺序，prompt 已要求质量优先排序）
+        pre_topk = len(valid_highlights)
+        valid_highlights = _topk_highlights(valid_highlights, LLM_HIGHLIGHT_TOP_K)
+
         highlight = HighlightCard(
             tldr_zh=result.get("tldr_zh", ""),
             worth_listening_verdict=VerdictType(result.get("worth_listening_verdict", "skim_outline")),
@@ -114,7 +130,8 @@ async def extract_highlights(
             estimated_time_saved_min=result.get("estimated_time_saved_min"),
         )
 
-        logger.info(f"Extracted {len(highlight.highlights)} valid highlights (from {len(result.get('highlights', []))} total)")
+        logger.info(f"Extracted {len(highlight.highlights)} highlights "
+                    f"(verify+topk applied, pre-topk={pre_topk})")
 
         if progress_cb:
             progress_cb(0.8)
@@ -124,6 +141,70 @@ async def extract_highlights(
     except Exception as e:
         logger.error(f"Highlight extraction failed: {e}")
         raise RuntimeError(f"Highlight extraction failed: {e}")
+
+
+async def _verify_highlights(
+    highlights: List[HighlightItem],
+    transcript: "Transcript",
+) -> List[HighlightItem]:
+    """二次 LLM 审核 keep/drop。失败时优雅降级（keep all），不阻塞 pipeline。"""
+    if not highlights:
+        return highlights
+    review_block = _build_highlight_review_block(highlights, transcript)
+    try:
+        result = await chat_json(
+            system=HIGHLIGHT_VERIFY_SYSTEM,
+            user=build_highlight_verify_user(review_block),
+            temperature=0.2,
+            response_format={"type": "json_object"},
+        )
+        kept = _apply_verdicts(highlights, result.get("reviews", []))
+        logger.info(f"[verify:highlight] {len(highlights)} → {len(kept)} (dropped {len(highlights) - len(kept)})")
+        return kept
+    except Exception as e:
+        logger.warning(f"[verify:highlight] failed, keep all {len(highlights)}: {e}")
+        return highlights
+
+
+def _apply_verdicts(
+    highlights: List[HighlightItem],
+    reviews: List[dict],
+) -> List[HighlightItem]:
+    """丢 verdict=drop 的条目；越界 index 和无效 review 忽略。"""
+    drop_indices = {
+        r.get("index") for r in reviews
+        if isinstance(r, dict) and r.get("verdict") == "drop"
+    }
+    return [h for i, h in enumerate(highlights) if i not in drop_indices]
+
+
+def _topk_highlights(highlights: List[HighlightItem], k: int) -> List[HighlightItem]:
+    """取前 k 条保留原顺序。k<=0 或 None 表示不截断。"""
+    if not k or k <= 0:
+        return highlights
+    return highlights[:k]
+
+
+def _build_highlight_review_block(
+    highlights: List[HighlightItem],
+    transcript: "Transcript",
+) -> str:
+    """构建审核输入：每条 highlight + cited segments 原文。"""
+    seg_by_id = {s.id: s for s in transcript.segments}
+    lines = []
+    for i, h in enumerate(highlights):
+        cited_texts = []
+        for sid in h.cited_segment_ids[:3]:
+            seg = seg_by_id.get(sid)
+            if seg:
+                cited_texts.append(f"[{sid}] {seg.text_translated or seg.text_original}")
+        lines.append(
+            f"[{i}] kind={h.kind.value}\n"
+            f"  text: {h.text_zh}\n"
+            f"  why: {h.why_zh}\n"
+            f"  cited: {' | '.join(cited_texts)}"
+        )
+    return "\n".join(lines)
 
 
 def _get_densest_chapters(
@@ -169,18 +250,50 @@ def _build_summaries_block(summaries: List[Dict[str, Any]]) -> str:
 def _build_raw_transcript(
     transcript: "Transcript",
     chapter_ids: List[str],
+    chapters: List[Dict[str, Any]],
     max_segments: int = None,
 ) -> str:
-    """构建原始字幕块"""
+    """构建原始字幕块：从指定章节的 segment id 范围取段，截到 max_segments 为止。
+
+    之前版本忽略 chapter_ids 直接遍历 transcript 取前 N 段，导致 LLM 实际
+    只看到节目开头而非"内容最密集的章节"。现在按章节顺序合并选中章节的
+    segment 范围，文本优先用翻译（如有）回退原文。
+    """
     from ..config import LLM_HIGHLIGHT_MAX_SEGMENTS
     if max_segments is None:
         max_segments = LLM_HIGHLIGHT_MAX_SEGMENTS
 
-    lines = []
+    # chapter_ids 形如 ["ch1", "ch3"] → 章节索引集合 {1, 3}
+    selected_indices: set = set()
+    for cid in chapter_ids or []:
+        if isinstance(cid, str) and cid.startswith("ch"):
+            try:
+                selected_indices.add(int(cid[2:]))
+            except ValueError:
+                logger.warning(f"Unparseable chapter id: {cid}")
+
+    # 按章节顺序收集选中章节的 segment id 范围
+    target_ranges: List[tuple] = []
+    for i, ch in enumerate(chapters):
+        if i in selected_indices:
+            start = ch.get("start_segment_id")
+            end = ch.get("end_segment_id")
+            if isinstance(start, int) and isinstance(end, int):
+                target_ranges.append((start, end))
+
+    seg_by_id = {s.id: s for s in transcript.segments}
+    lines: List[str] = []
     count = 0
-    for seg in transcript.segments:
+    for start_id, end_id in target_ranges:
+        for seg_id in range(start_id, end_id + 1):
+            if count >= max_segments:
+                break
+            seg = seg_by_id.get(seg_id)
+            if seg is None:
+                continue
+            text = seg.text_translated or seg.text_original
+            lines.append(f"{seg.id} | {text}")
+            count += 1
         if count >= max_segments:
             break
-        lines.append(f"{seg.id} | {seg.text_original}")
-        count += 1
     return "\n".join(lines)

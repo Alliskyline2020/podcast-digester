@@ -41,11 +41,9 @@ async def generate_for_episode(episode_id: str):
 
         print(f"\n✅ 成功生成并保存产品洞察！")
         print(f"\n产品洞察:")
-        print(f"  - 产品相关洞察: {len(product_insights.product_insights_zh)} 条")
-        if hasattr(product_insights, 'technical_insights_zh'):
-            print(f"  - 技术洞察: {len(product_insights.technical_insights_zh)} 条")
-        if hasattr(product_insights, 'market_insights_zh'):
-            print(f"  - 市场洞察: {len(product_insights.market_insights_zh)} 条")
+        print(f"  - 产品洞察: {len(product_insights.product.items)} 条")
+        print(f"  - 技术洞察: {len(product_insights.technical.items)} 条")
+        print(f"  - 市场洞察: {len(product_insights.market.items)} 条")
 
         return product_insights
 

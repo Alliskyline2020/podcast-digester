@@ -7,8 +7,14 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional, TYPE_CHECKING, Callable
 
 from ..llm import chat_json
-from ..prompts import PRODUCT_INSIGHTS_SYSTEM, build_product_insights_user
-from ..models import ProductInsights
+from ..prompts import (
+    PRODUCT_INSIGHTS_SYSTEM,
+    PRODUCT_INSIGHTS_VERIFY_SYSTEM,
+    build_product_insights_user,
+    build_product_insights_verify_user,
+)
+from ..models import ProductInsights, InsightItem, InsightGroup, InsightCategory
+from .insight_utils import dedup_insights, dedup_entities, apply_topk
 
 if TYPE_CHECKING:
     from ..models import Transcript, Outline, ChapterSummary, HighlightCard
@@ -49,7 +55,7 @@ async def extract_product_insights(
     # 选择内容最密集的章节获取原始字幕
     from ..config import LLM_HIGHLIGHT_MAX_SEGMENTS
     dense_chapter_ids = _get_densest_chapters(chapters, transcript, max_chapters=8)
-    raw_block = _build_raw_transcript(transcript, dense_chapter_ids, max_segments=LLM_HIGHLIGHT_MAX_SEGMENTS)
+    raw_block = _build_raw_transcript(transcript, dense_chapter_ids, chapters, max_segments=LLM_HIGHLIGHT_MAX_SEGMENTS)
 
     user_input = build_product_insights_user(
         title, duration_min, outline_block, summaries_block, raw_block
@@ -61,21 +67,49 @@ async def extract_product_insights(
             user=user_input,
             temperature=0.3,
             response_format={"type": "json_object"},
+            max_tokens=8192,
         )
+
+        from ..config import LLM_INSIGHTS_TOP_K, LLM_INSIGHTS_VERIFY_ENABLED
+        seg_ids = {s.id for s in transcript.segments}
+
+        # 解析三个 domain 的结构化 items（校验 cited_segment_ids 真实存在）
+        product_items = _parse_insight_items(result.get("product", {}).get("items", []), seg_ids, "product")
+        technical_items = _parse_insight_items(result.get("technical", {}).get("items", []), seg_ids, "technical")
+        market_items = _parse_insight_items(result.get("market", {}).get("items", []), seg_ids, "market")
+
+        # 每 domain: 去重 → verify（可选）→ topk
+        product_items = dedup_insights(product_items)
+        technical_items = dedup_insights(technical_items)
+        market_items = dedup_insights(market_items)
+
+        if LLM_INSIGHTS_VERIFY_ENABLED:
+            if progress_cb:
+                progress_cb(0.6)
+            product_items = await _verify_insights(product_items, transcript, "product")
+            technical_items = await _verify_insights(technical_items, transcript, "technical")
+            market_items = await _verify_insights(market_items, transcript, "market")
+
+        product_items = apply_topk(product_items, LLM_INSIGHTS_TOP_K)
+        technical_items = apply_topk(technical_items, LLM_INSIGHTS_TOP_K)
+        market_items = apply_topk(market_items, LLM_INSIGHTS_TOP_K)
+
+        companies = dedup_entities(result.get("mentioned_companies", []))
+        technologies = dedup_entities(result.get("mentioned_technologies", []))
 
         insights = ProductInsights(
-            product_insights_zh=result.get("product_insights_zh", []),
-            technical_insights_zh=result.get("technical_insights_zh", []),
-            market_insights_zh=result.get("market_insights_zh", []),
-            mentioned_companies=result.get("mentioned_companies", []),
-            mentioned_technologies=result.get("mentioned_technologies", []),
+            product=InsightGroup(items=product_items),
+            technical=InsightGroup(items=technical_items),
+            market=InsightGroup(items=market_items),
+            mentioned_companies=companies,
+            mentioned_technologies=technologies,
         )
 
-        logger.info(f"Extracted product insights: {len(insights.product_insights_zh)} product, "
-                    f"{len(insights.technical_insights_zh)} technical, "
-                    f"{len(insights.market_insights_zh)} market, "
-                    f"{len(insights.mentioned_companies)} companies, "
-                    f"{len(insights.mentioned_technologies)} technologies")
+        logger.info(f"Extracted product insights: {len(product_items)} product, "
+                    f"{len(technical_items)} technical, "
+                    f"{len(market_items)} market, "
+                    f"{len(companies)} companies, "
+                    f"{len(technologies)} technologies")
 
         if progress_cb:
             progress_cb(1.0)
@@ -85,6 +119,96 @@ async def extract_product_insights(
     except Exception as e:
         logger.error(f"Product insights extraction failed: {e}")
         raise RuntimeError(f"Product insights extraction failed: {e}")
+
+
+def _parse_insight_items(
+    raw_items: List[Dict[str, Any]],
+    valid_seg_ids: set,
+    domain: str,
+) -> List[InsightItem]:
+    """解析 LLM 返回的 dict 列表为 InsightItem。
+
+    - 校验 cited_segment_ids 真实存在（过滤无效 id）
+    - 非法 category 回退 OTHER（不抛异常，保证管道不中断）
+    - 无有效 cited 的条目跳过
+    """
+    items: List[InsightItem] = []
+    for raw in raw_items:
+        if not isinstance(raw, dict):
+            continue
+        text = (raw.get("text_zh") or "").strip()
+        if not text:
+            continue
+        cited = [
+            i for i in (raw.get("cited_segment_ids") or [])
+            if isinstance(i, int) and i in valid_seg_ids
+        ]
+        if not cited:
+            logger.warning(f"Skip {domain} insight without valid cited_segment_ids: {text[:40]}")
+            continue
+        try:
+            category = InsightCategory(raw.get("category", "other"))
+        except ValueError:
+            logger.warning(f"Invalid category '{raw.get('category')}' for {domain}, fallback OTHER")
+            category = InsightCategory.OTHER
+        items.append(InsightItem(
+            text_zh=text,
+            cited_segment_ids=cited,
+            rationale_zh=(raw.get("rationale_zh") or "").strip(),
+            category=category,
+        ))
+    return items
+
+
+async def _verify_insights(
+    items: List[InsightItem],
+    transcript: "Transcript",
+    domain: str,
+) -> List[InsightItem]:
+    """二次 LLM 审核 keep/drop。失败时优雅降级（keep all）。"""
+    if not items:
+        return items
+    review_block = _build_insight_review_block(items, transcript, domain)
+    try:
+        result = await chat_json(
+            system=PRODUCT_INSIGHTS_VERIFY_SYSTEM,
+            user=build_product_insights_verify_user(review_block),
+            temperature=0.2,
+            response_format={"type": "json_object"},
+        )
+        drop_indices = {
+            r.get("index") for r in result.get("reviews", [])
+            if r.get("verdict") == "drop" and r.get("domain") == domain
+        }
+        kept = [it for i, it in enumerate(items) if i not in drop_indices]
+        logger.info(f"[verify:{domain}] {len(items)} → {len(kept)} (dropped {len(items) - len(kept)})")
+        return kept
+    except Exception as e:
+        logger.warning(f"[verify:{domain}] failed, keep all {len(items)}: {e}")
+        return items
+
+
+def _build_insight_review_block(
+    items: List[InsightItem],
+    transcript: "Transcript",
+    domain: str,
+) -> str:
+    """构建审核输入：每条 insight + cited segments 原文。"""
+    seg_by_id = {s.id: s for s in transcript.segments}
+    lines = []
+    for i, it in enumerate(items):
+        cited_texts = []
+        for sid in it.cited_segment_ids[:3]:
+            seg = seg_by_id.get(sid)
+            if seg:
+                cited_texts.append(f"[{sid}] {seg.text_translated or seg.text_original}")
+        lines.append(
+            f"[{domain}:{i}] category={it.category.value}\n"
+            f"  text: {it.text_zh}\n"
+            f"  rationale: {it.rationale_zh}\n"
+            f"  cited: {' | '.join(cited_texts)}"
+        )
+    return "\n".join(lines)
 
 
 async def run_product_insights_stage(
@@ -184,18 +308,41 @@ def _build_summaries_block(summaries: List[Dict[str, Any]]) -> str:
 def _build_raw_transcript(
     transcript: "Transcript",
     chapter_indices: List[int],
+    chapters: List[Dict[str, Any]],
     max_segments: int = None,
 ) -> str:
-    """构建原始字幕块"""
+    """构建原始字幕块：从指定章节的 segment id 范围取段。
+
+    之前忽略 chapter_indices 直接遍历 transcript 取前 N 段，导致 LLM 只看到
+    节目开头而非"内容最密集的章节"。现在按章节顺序取选中章节的 segment 范围，
+    文本优先用翻译（如有）回退原文。
+    """
     from ..config import LLM_HIGHLIGHT_MAX_SEGMENTS
     if max_segments is None:
         max_segments = LLM_HIGHLIGHT_MAX_SEGMENTS
 
-    lines = []
+    selected = set(chapter_indices or [])
+    target_ranges: List[tuple] = []
+    for i, ch in enumerate(chapters):
+        if i in selected:
+            start = ch.get("start_segment_id")
+            end = ch.get("end_segment_id")
+            if isinstance(start, int) and isinstance(end, int):
+                target_ranges.append((start, end))
+
+    seg_by_id = {s.id: s for s in transcript.segments}
+    lines: List[str] = []
     count = 0
-    for seg in transcript.segments:
+    for start_id, end_id in target_ranges:
+        for seg_id in range(start_id, end_id + 1):
+            if count >= max_segments:
+                break
+            seg = seg_by_id.get(seg_id)
+            if seg is None:
+                continue
+            text = seg.text_translated or seg.text_original
+            lines.append(f"{seg.id} | {text}")
+            count += 1
         if count >= max_segments:
             break
-        lines.append(f"{seg.id} | {seg.text_original}")
-        count += 1
     return "\n".join(lines)

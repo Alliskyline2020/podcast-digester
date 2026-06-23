@@ -5,7 +5,7 @@ Pydantic v2 严格模型定义
 from datetime import datetime
 from enum import Enum
 from typing import Optional, List, Any, Dict
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class EpisodeStatus(str, Enum):
@@ -252,13 +252,78 @@ class PodcastAnalysis(BaseModel):
 
 # ==================== 产品和技术洞察 ====================
 
+class InsightCategory(str, Enum):
+    """洞察细分维度（前缀命名避免不同域的 trend 冲突）"""
+    # product
+    PRODUCT_STRATEGY = "product_strategy"
+    PRODUCT_UX = "product_ux"
+    PRODUCT_GROWTH = "product_growth"
+    PRODUCT_POSITIONING = "product_positioning"
+    # technical
+    TECH_ARCHITECTURE = "tech_architecture"
+    TECH_ENG_PRACTICE = "tech_eng_practice"
+    TECH_TREND = "tech_trend"
+    TECH_CHALLENGE = "tech_challenge"
+    # market
+    MARKET_TREND = "market_trend"
+    MARKET_COMPETITION = "market_competition"
+    MARKET_BUSINESS_MODEL = "market_business_model"
+    MARKET_OPPORTUNITY = "market_opportunity"
+    OTHER = "other"
+
+
+class InsightItem(BaseModel):
+    """单条结构化洞察"""
+    text_zh: str = Field(..., min_length=1, description="洞察正文（prompt 约定 30-80 字，模型层只要求非空）")
+    cited_segment_ids: List[int] = Field(default_factory=list, description="支撑段落 id")
+    rationale_zh: str = Field(default="", description="提炼依据 10-30 字")
+    category: InsightCategory = Field(default=InsightCategory.OTHER, description="细分维度")
+    confidence: Optional[float] = Field(None, ge=0, le=1, description="verify 阶段打分（可选）")
+
+
+class InsightGroup(BaseModel):
+    """一个域下的洞察集合"""
+    items: List[InsightItem] = Field(default_factory=list, description="该域的洞察列表")
+
+
 class ProductInsights(BaseModel):
-    """产品和技术洞察"""
-    product_insights_zh: List[str] = Field(default_factory=list, description="产品相关洞察")
-    technical_insights_zh: List[str] = Field(default_factory=list, description="技术相关洞察")
-    market_insights_zh: List[str] = Field(default_factory=list, description="市场/行业洞察")
+    """产品/技术/市场洞察（v3 结构化 + 旧 list[str] 兼容）
+
+    旧 shape: {"product_insights_zh": ["..."], "technical_insights_zh": [...], ...}
+    新 shape: {"product": {"items": [{text_zh, cited_segment_ids, rationale_zh, category}]}, ...}
+    model_validator(mode=before) 在解析前把旧 list[str] 包装成 InsightItem(category=other)，
+    保证旧 episode 的 product_insights.json 无需迁移即可加载。
+    """
+    schema_version: int = Field(default=3)
+    product: InsightGroup = Field(default_factory=InsightGroup, description="产品洞察")
+    technical: InsightGroup = Field(default_factory=InsightGroup, description="技术洞察")
+    market: InsightGroup = Field(default_factory=InsightGroup, description="市场洞察")
     mentioned_companies: List[str] = Field(default_factory=list, description="提到的公司/产品")
     mentioned_technologies: List[str] = Field(default_factory=list, description="提到的技术栈/工具")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _upgrade_legacy(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        # 已是新 shape（含 product/technical/market 任一）则不处理
+        if any(k in data for k in ("product", "technical", "market")):
+            return data
+        # 旧 shape：把 *_insights_zh list[str] 升级为 InsightGroup
+        upgraded: Dict[str, Any] = dict(data)
+        for legacy_key in ("product_insights_zh", "technical_insights_zh", "market_insights_zh"):
+            legacy_val = upgraded.pop(legacy_key, None)
+            if isinstance(legacy_val, list):
+                domain_key = legacy_key.replace("_insights_zh", "")  # product/technical/market
+                upgraded[domain_key] = {
+                    "items": [
+                        {"text_zh": s, "category": "other"}
+                        for s in legacy_val
+                        if isinstance(s, str) and s.strip()
+                    ]
+                }
+        upgraded.setdefault("schema_version", 3)
+        return upgraded
 
 
 class EpisodeBundle(BaseModel):
@@ -380,7 +445,7 @@ class EpisodeViewState(BaseModel):
 
 class ExportRequest(BaseModel):
     """导出请求"""
-    format: str = Field(..., description="导出格式: html 或 png")
+    format: str = Field(..., description="导出格式: html / png / pdf")
     include_transcript: bool = Field(default=False, description="是否包含完整字幕")
     theme: str = Field(default="light", description="主题: light 或 dark")
     width: int = Field(default=1080, description="PNG宽度（像素）")
