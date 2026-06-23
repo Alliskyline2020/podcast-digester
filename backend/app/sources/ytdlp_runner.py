@@ -299,8 +299,8 @@ def _merge_bilingual_transcripts(
     合并中英文字幕
 
     策略：
-    - 以中文字幕为主（text_original）
-    - 英文字幕作为翻译（text_translated）
+    - 以英文字幕为原文（text_original，播客原语种）
+    - 中文字幕作为翻译（text_translated）
     - 按时间戳对齐（模糊匹配，允许3秒误差）
 
     Args:
@@ -336,20 +336,20 @@ def _merge_bilingual_transcripts(
                     en_text = en_text_val
                     break
 
-        # 创建合并后的段落
+        # 创建合并后的段落：英文为原文（播客原语种），中文为翻译
         merged_seg = Segment(
             id=zh_seg.id,
             start_ms=zh_seg.start_ms,
             end_ms=zh_seg.end_ms,
-            text_original=zh_seg.text_original,  # 中文作为原文
-            text_translated=en_text,  # 英文作为翻译
+            text_original=en_text or "",  # 英文作为原文
+            text_translated=zh_seg.text_original,  # 中文作为翻译
         )
         merged_segments.append(merged_seg)
 
     # 返回合并后的字幕
     return Transcript(
         episode_id="",  # 需要在调用时设置
-        language="zh",  # 主语言是中文
+        language="en",  # 主语言是英文
         segments=merged_segments,
     )
 

@@ -56,20 +56,24 @@ async def export_episode_summary(
     if not media_dir.exists():
         raise HTTPException(status_code=404, detail="Episode media directory not found")
 
-    # 尝试从transcript.json获取metadata
+    # 优先从数据库读 episode（pipeline 处理后 title 已更新为真实标题）
+    from ..database import EpisodeRepository
+    db_episode = await EpisodeRepository.get_by_id(episode_id)
+
+    # 回退：transcript.json 的 meta（旧路径，无 DB 记录时）
     transcript_file = media_dir / "transcript.json"
     episode_meta = {}
-
     if transcript_file.exists():
         transcript_data = safe_read_json(transcript_file)
         if transcript_data:
             episode_meta = transcript_data.get('meta', {})
 
-    # 构造episode对象（至少要有id）
+    db_title = (db_episode or {}).get('title') or ''
+    # 构造episode对象：标题优先用 DB（处理后真实标题），其次 transcript meta，最后 episode_id
     episode = {
         'id': episode_id,
-        'title': episode_meta.get('title', episode_id),
-        'title_zh': episode_meta.get('title_zh', episode_meta.get('title', episode_id)),
+        'title': db_title or episode_meta.get('title') or episode_id,
+        'title_zh': episode_meta.get('title_zh') or db_title or episode_id,
         'tldr_zh': '',  # 后续从highlight加载
         'worth_listening_verdict': '',
         'target_audience_zh': '',
