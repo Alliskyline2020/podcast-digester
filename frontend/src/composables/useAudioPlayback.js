@@ -27,39 +27,33 @@ export function useAudioPlayback({ seekTo, audioRef }) {
 
     const audio = audioRef.value
     const targetTime = ms / 1000
+    const wasPaused = audio.paused
 
-    // 先暂停再 seek，避免某些浏览器在 play 中 seek 的竞态
-    audio.pause()
+    // 直接 seek —— 浏览器对 audio.currentTime 的 setter 是同步的，
+    // 即使是 HTTP Range 流式音频也会立即更新属性并异步执行底层 seek。
+    // 之前的版本先 pause() 再 seek 再 setTimeout 检查，反而引入了
+    // "audio 看起来没动"的 UX bug（pause+100ms 延迟让用户误以为没响应）。
     audio.currentTime = targetTime
 
-    // 等待 seeked 事件确认跳转完成；超时回退一次
-    setTimeout(() => {
-      if (Math.abs(audio.currentTime - targetTime) < 1) {
-        audio.play().catch((err) => {
-          // 通常是因为浏览器 autoplay policy；用户已经手动操作过页面，
-          // 这里失败基本是 audio 状态不对，忽略即可
-          console.warn('[useAudioPlayback] play after seek failed:', err)
-        })
-      } else {
-        console.warn('[useAudioPlayback] seek did not land, retrying once')
-        audio.currentTime = targetTime
-        setTimeout(() => audio.play().catch(() => {}), 100)
-      }
-    }, 100)
+    // 如果之前在播放，保持播放状态；如果之前暂停了，也自动开始播放
+    // （用户点击章节/金句的语义就是"跳到这里继续听"）。
+    if (wasPaused) {
+      audio.play().catch((err) => {
+        // 通常是因为浏览器 autoplay policy；用户已经手动操作过页面，
+        // 这里失败基本是 audio 状态不对，忽略即可
+        console.warn('[useAudioPlayback] play after seek failed:', err)
+      })
+    }
   }
 
   /**
-   * 对外暴露的 seek API：处理"audio 还没 ready"和"正在 seek 中"两种竞态。
+   * 对外暴露的 seek API：用户点击章节/金句/字幕段落时调用。
+   * 直接执行 seek；不再做"pause-first + 100ms 延迟 + retry"那套复杂逻辑，
+   * 那是历史上为自动滚动同步写的，但实际 user-click 场景反而不需要。
    */
   const localSeekTo = (ms) => {
     if (!ms && ms !== 0) {
       console.warn('[useAudioPlayback] invalid timestamp:', ms)
-      return
-    }
-
-    // 正在 seek：只保留最新一次（丢弃队列里的旧值）
-    if (isSeeking.value) {
-      seekQueue.value = [ms]
       return
     }
 
@@ -77,7 +71,6 @@ export function useAudioPlayback({ seekTo, audioRef }) {
       return
     }
 
-    isSeeking.value = true
     executeSeek(ms)
   }
 

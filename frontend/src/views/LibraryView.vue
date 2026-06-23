@@ -115,23 +115,14 @@
               <span class="progress-percent">{{ Math.round(ep.overall_progress * 100) }}%</span>
             </div>
 
-            <!-- 阶段流程显示 -->
-            <div v-if="ep.stages && ep.stages.length > 0" class="stages-flow">
-              <div
-                v-for="(stage, idx) in displayStages(ep.stages)"
-                :key="idx"
-                class="stage-step"
-                :class="{
-                  'stage-active': stage.id === ep.current_stage,
-                  'stage-completed': stage.progress >= 1,
-                  'stage-pending': stage.progress === 0 && stage.id !== ep.current_stage
-                }"
-              >
-                <div class="stage-dot"></div>
-                <span class="stage-name">{{ stage.name }}</span>
-              </div>
+            <!-- 当前阶段：文字 + 阶段内百分比（替代原圆点流程） -->
+            <div class="stage-current">
+              <span class="stage-current-label">
+                {{ currentStageName(ep) ? `正在${currentStageName(ep)}` : statusText(ep.status) }}
+              </span>
+              <span v-if="currentStagePercent(ep) !== null" class="stage-current-percent">{{ currentStagePercent(ep) }}%</span>
+              <span v-else class="stage-current-indeterminate">进行中…</span>
             </div>
-            <span v-else class="progress-text">正在处理...</span>
           </div>
 
           <!-- 完成状态 -->
@@ -155,7 +146,13 @@
           <button v-if="isProcessing(ep.status)" @click.stop="confirmCancel(ep)" class="cancel-btn">取消</button>
           <!-- 失败状态显示恢复和删除按钮 -->
           <template v-else-if="ep.status === 'failed'">
-            <button @click.stop="confirmResume(ep)" class="resume-btn">恢复</button>
+            <button
+              @click.stop="resumeEpisode(ep)"
+              :disabled="resumingId === ep.id"
+              class="resume-btn"
+            >
+              {{ resumingId === ep.id ? '恢复中...' : '恢复' }}
+            </button>
             <button @click.stop="confirmDelete(ep)" class="delete-btn">删除</button>
           </template>
           <!-- 完成状态显示删除按钮 -->
@@ -214,41 +211,6 @@
       </div>
     </div>
 
-    <!-- 恢复确认对话框 -->
-    <div v-if="showResumeDialog" class="dialog-overlay" @click.self="cancelResume">
-      <div class="dialog-box" role="dialog" aria-modal="true" aria-labelledby="resume-dialog-title">
-        <h3 id="resume-dialog-title" class="dialog-title">恢复任务</h3>
-        <p class="dialog-message">
-          恢复节目「{{ episodeToResume?.title }}」的处理
-        </p>
-        <div class="dialog-input-group">
-          <label>请输入原始链接：</label>
-          <input
-            v-model="resumeInput"
-            placeholder="粘贴原始播客链接或文件路径..."
-            class="dialog-input"
-            :class="{ 'dialog-input-error': resumeError }"
-            :aria-invalid="!!resumeError"
-            :aria-describedby="resumeError ? 'resume-error' : undefined"
-            @keyup.enter="executeResume"
-            @input="resumeError = ''"
-          />
-          <p v-if="resumeError" id="resume-error" class="dialog-error" role="alert">
-            {{ resumeError }}
-          </p>
-        </div>
-        <div class="dialog-actions">
-          <button @click="cancelResume" class="dialog-btn dialog-btn-cancel">取消</button>
-          <button
-            @click="executeResume"
-            :disabled="!resumeInput.trim() || resumeInProgress"
-            class="dialog-btn dialog-btn-confirm"
-          >
-            {{ resumeInProgress ? '恢复中...' : '恢复' }}
-          </button>
-        </div>
-      </div>
-    </div>
     </div>
     <!-- Admin token 设置对话框 -->
     <TokenDialog
@@ -328,12 +290,8 @@ const episodeToDelete = ref(null)
 const showCancelDialog = ref(false)
 const episodeToCancel = ref(null)
 
-// 恢复确认对话框状态
-const showResumeDialog = ref(false)
-const episodeToResume = ref(null)
-const resumeInput = ref('')
-const resumeError = ref('')
-const resumeInProgress = ref(false)
+// 正在恢复的 episode id（用于按钮 loading 态 + 防重复点击）
+const resumingId = ref(null)
 
 // 状态文本映射
 const statusText = (status) => {
@@ -357,17 +315,23 @@ const verdictText = (verdict) => {
   return texts[verdict] || verdict
 }
 
-// 阶段名称映射（保留用于兼容，但API已返回中文名称）
-const stageName = (name) => {
-  // API现在直接返回中文名称，原样返回即可
-  return name || ''
+// 当前阶段的中文名（从 ep.stages 里按 current_stage 查）
+const currentStageName = (ep) => {
+  if (!ep.stages || !ep.current_stage) return ''
+  const stage = ep.stages.find(s => s.id === ep.current_stage)
+  return stage?.name || ''
 }
 
-// 显示主要阶段（API已按正确顺序返回）
-const displayStages = (stages) => {
-  if (!stages || stages.length === 0) return []
-  // 过滤掉 null/undefined 和 done 阶段（done在进度条中不显示）
-  return stages.filter(s => s && s.id !== 'done')
+// 当前阶段的内部进度百分比（0-100）。
+// 仅在 progress 严格位于 (0, 1) 时返回数字：
+//   - 0：阶段刚启动、后端尚未上报中间进度（如 ASR 不上报），显示 indeterminate
+//   - 1：阶段即将切到下一个，显示 indeterminate 避免百分比闪烁
+const currentStagePercent = (ep) => {
+  if (!ep.stages || !ep.current_stage) return null
+  const stage = ep.stages.find(s => s.id === ep.current_stage)
+  if (!stage) return null
+  if (stage.progress > 0 && stage.progress < 1) return Math.round(stage.progress * 100)
+  return null
 }
 
 const isProcessing = (status) => {
@@ -464,40 +428,17 @@ const executeCancel = async () => {
   }
 }
 
-// 恢复确认
-const confirmResume = (episode) => {
-  episodeToResume.value = episode
-  resumeInput.value = ''
-  showResumeDialog.value = true
-}
-
-const cancelResume = () => {
-  showResumeDialog.value = false
-  episodeToResume.value = null
-  resumeInput.value = ''
-  resumeError.value = ''
-}
-
-const executeResume = async () => {
-  if (!episodeToResume.value) return
-
-  const { ok, error: validationError, normalized } = validatePodcastInput(resumeInput.value)
-  if (!ok) {
-    // 用 inline error 替代 alert()，避免阻塞 + 不可测
-    resumeError.value = validationError
-    return
-  }
-
-  resumeError.value = ''
-  resumeInProgress.value = true
+// 恢复：直接调用后端，raw_input 留空 → 后端从 source 表读原始 URL
+const resumeEpisode = async (episode) => {
+  if (resumingId.value) return
+  resumingId.value = episode.id
   try {
-    await api.resumeEpisode(episodeToResume.value.id, normalized)
+    await api.resumeEpisode(episode.id)
     await loadEpisodes()
-    cancelResume()
   } catch (e) {
-    resumeError.value = e.message || '恢复失败'
+    alert('恢复失败: ' + (e.message || '未知错误'))
   } finally {
-    resumeInProgress.value = false
+    resumingId.value = null
   }
 }
 
@@ -911,73 +852,47 @@ onUnmounted(() => {
   min-width: 40px;
 }
 
-/* 阶段流程 */
-.stages-flow {
+/* 当前阶段：文字 + 阶段内百分比 */
+.stage-current {
   display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 8px 0;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
 }
 
-.stage-step {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: #9ca3af;
-  position: relative;
-}
-
-.stage-step:not(:last-child)::after {
-  content: '';
-  position: absolute;
-  right: -8px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 4px;
-  height: 1px;
-  background: #e5e7eb;
-}
-
-.stage-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #e5e7eb;
-  transition: all 0.3s ease;
-}
-
-.stage-step.stage-active .stage-dot {
-  background: #4f8ef7;
-  box-shadow: 0 0 0 3px rgba(79, 142, 247, 0.2);
-  animation: pulse 1.5s infinite;
-}
-
-.stage-step.stage-active .stage-name {
+.stage-current-label {
   color: #4f8ef7;
   font-weight: 600;
 }
 
-.stage-step.stage-completed .stage-dot {
-  background: #22c55e;
+.stage-current-percent {
+  color: #4f8ef7;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
 }
 
-.stage-step.stage-completed .stage-name {
-  color: #22c55e;
-}
-
-@keyframes pulse {
-  0%, 100% {
-    box-shadow: 0 0 0 3px rgba(79, 142, 247, 0.2);
-  }
-  50% {
-    box-shadow: 0 0 0 6px rgba(79, 142, 247, 0.1);
-  }
-}
-
-.progress-text {
+/* indeterminate：后端尚未上报阶段内进度（如本地 ASR） */
+.stage-current-indeterminate {
+  color: #9ca3af;
   font-size: 12px;
-  color: #6b7280;
+  position: relative;
+}
+
+.stage-current-indeterminate::after {
+  content: '';
+  display: inline-block;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #9ca3af;
+  margin-left: 4px;
+  vertical-align: middle;
+  animation: indeterminate-blink 1.2s infinite;
+}
+
+@keyframes indeterminate-blink {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
 }
 
 .tldr {
@@ -1185,48 +1100,6 @@ onUnmounted(() => {
 .dialog-btn-confirm:disabled {
   background: #cbd5e1;
   cursor: not-allowed;
-}
-
-.dialog-input-group {
-  margin-bottom: 20px;
-}
-
-.dialog-input-group label {
-  display: block;
-  font-size: 13px;
-  font-weight: 500;
-  color: #374151;
-  margin-bottom: 8px;
-}
-
-.dialog-input {
-  width: 100%;
-  padding: 10px 12px;
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
-  font-size: 14px;
-}
-
-.dialog-input:focus {
-  outline: none;
-  border-color: #4f8ef7;
-  box-shadow: 0 0 0 3px rgba(79, 142, 247, 0.1);
-}
-
-.dialog-input-error {
-  border-color: #ef4444;
-}
-
-.dialog-input-error:focus {
-  border-color: #ef4444;
-  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.1);
-}
-
-.dialog-error {
-  margin: 6px 0 0;
-  color: #dc2626;
-  font-size: 13px;
-  line-height: 1.4;
 }
 
 /* 仅给屏幕阅读器可见的标签，视觉隐藏但对辅助技术可见 */
