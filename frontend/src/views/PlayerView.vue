@@ -23,11 +23,19 @@
           </svg>
         </button>
         <!-- 导出按钮 -->
-        <button @click="showExportModal = true" class="icon-btn" title="导出摘要">
+        <button @click="showExportModal = true" class="icon-btn no-print" title="导出摘要">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
             <polyline points="7 10 12 15 17 10"/>
             <line x1="12" y1="15" x2="12" y2="3"/>
+          </svg>
+        </button>
+        <!-- 打印 / 保存为 PDF：调浏览器原生打印，排版完全用本页 CSS -->
+        <button @click="handlePrint" class="icon-btn no-print" title="打印 / 保存为 PDF">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="6 9 6 2 18 2 18 9"/>
+            <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/>
+            <rect x="6" y="14" width="12" height="8"/>
           </svg>
         </button>
       </div>
@@ -210,7 +218,7 @@
                 :disabled="!hasOriginal"
                 class="lang-btn"
               >
-                原文
+                英文
               </button>
               <button
                 @click="subtitleLang = 'translated'"
@@ -218,7 +226,7 @@
                 :disabled="!hasTranslated"
                 class="lang-btn"
               >
-                翻译
+                中文
               </button>
               <button
                 @click="subtitleLang = 'both'"
@@ -502,6 +510,9 @@ const {
 const subtitleLang = ref('original')
 const expandedChapter = ref(-1)
 const showExportModal = ref(false)
+// 调浏览器原生打印对话框（用户选"保存为 PDF"即可导出），
+// 配合 @media print CSS 隐藏控件、只留摘要/金句/洞察内容
+const handlePrint = () => window.print()
 const showTranscriptEditor = ref(false)
 // isMappingExpanded 已移除 - 不再需要映射展开状态
 
@@ -1786,7 +1797,7 @@ onUnmounted(() => {
   background: linear-gradient(to top, rgba(255, 255, 255, 0.98), rgba(255, 255, 255, 0.95));
   backdrop-filter: blur(10px);
   border-top: 1px solid #e5e7eb;
-  padding: 12px 20px;
+  padding: 6px 16px;
   z-index: 50;
   box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.05);
 }
@@ -1804,11 +1815,11 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 16px;
+  padding: 3px 10px;
   background: #f3f4f6;
-  border-radius: 10px;
+  border-radius: 8px;
   color: #6b7280;
-  font-size: 13px;
+  font-size: 11px;
   font-weight: 600;
   border: 1px solid #e5e7eb;
 }
@@ -1828,8 +1839,8 @@ onUnmounted(() => {
 .shortcut-chip {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 14px;
+  gap: 5px;
+  padding: 3px 8px;
   background: white;
   border: 1px solid #e5e7eb;
   border-radius: 10px;
@@ -1847,21 +1858,21 @@ onUnmounted(() => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 28px;
-  height: 24px;
-  padding: 0 8px;
+  min-width: 20px;
+  height: 16px;
+  padding: 0 5px;
   background: linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%);
   border: 1px solid #d1d5db;
   border-radius: 6px;
   font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
-  font-size: 13px;
+  font-size: 11px;
   font-weight: 600;
   color: #1f2937;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05), inset 0 1px 0 rgba(255, 255, 255, 0.5);
 }
 
 .shortcut-chip span {
-  font-size: 13px;
+  font-size: 11px;
   font-weight: 500;
   color: #4b5563;
   white-space: nowrap;
@@ -1926,6 +1937,45 @@ onUnmounted(() => {
 
   .shortcut-chip span {
     font-size: 11px;
+  }
+}
+
+/* ========== 打印 / 保存为 PDF ==========
+   点打印按钮调浏览器原生打印（handlePrint），隐藏控件只留内容。
+   用户切到目标 tab（如"摘要+金句"）后点打印按钮，打印对话框里选"保存为 PDF"。
+*/
+@media print {
+  /* 隐藏所有控件、导航、音频、快捷键栏 */
+  .player-header,
+  .audio-section,
+  .tab-header,
+  .shortcuts-bar,
+  .language-toggles,
+  .transcript-header,
+  .no-print {
+    display: none !important;
+  }
+  /* 内容区铺满，去掉 padding/background/max-width 限制 */
+  .player-view {
+    padding: 0 !important;
+    margin: 0 !important;
+    max-width: none !important;
+    background: white !important;
+  }
+  .tab-content,
+  .insights-content {
+    display: block !important;
+    max-height: none !important;
+    overflow: visible !important;
+    padding: 0 !important;
+  }
+  /* 卡片避免跨页断裂 */
+  .highlight-card,
+  .insight-card,
+  .chapter-summary,
+  .insight-section {
+    break-inside: avoid;
+    page-break-inside: avoid;
   }
 }
 </style>
