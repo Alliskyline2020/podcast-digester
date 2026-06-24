@@ -423,25 +423,26 @@ async def _try_subtitle_fetch(
     en_transcript = None
 
     for vtt_file in found_files:
-        name_lower = vtt_file.name.lower()
+        # 文件名格式 sub.{lang}.vtt，lang 可能是 en / zh-Hans / en-zh-Hans（英文翻译自中文）
+        # / zh-Hans-en（中文翻译自英文）。按"目标语言"= lang 第一段 判断归属：
+        #   en-zh-Hans → 目标 en → 英文；zh-Hans-en → 目标 zh → 中文
+        name_parts = vtt_file.name.split('.')
+        lang_code = name_parts[1] if len(name_parts) >= 3 else ""
+        target_lang = lang_code.split('-')[0].lower()
+
         with open(vtt_file, "r", encoding="utf-8") as f:
             vtt_content = f.read()
 
-        # 识别中文字幕
-        if (".zh." in name_lower or "zh-hans" in name_lower or
-            name_lower.startswith("zh.") or name_lower.endswith(".zh.vtt")):
+        if target_lang.startswith("zh"):
             parsed = parse_vtt_to_transcript(vtt_content, lang="zh")
             if parsed and len(parsed.segments) > 5:
                 zh_transcript = parsed
-                logger.info(f"Found Chinese subtitle: {len(parsed.segments)} segments")
-
-        # 识别英文字幕
-        elif (".en." in name_lower or name_lower.startswith("en.") or
-              name_lower.endswith(".en.vtt")):
+                logger.info(f"Found Chinese subtitle ({lang_code}): {len(parsed.segments)} segments")
+        elif target_lang == "en":
             parsed = parse_vtt_to_transcript(vtt_content, lang="en")
             if parsed and len(parsed.segments) > 5:
                 en_transcript = parsed
-                logger.info(f"Found English subtitle: {len(parsed.segments)} segments")
+                logger.info(f"Found English subtitle ({lang_code}): {len(parsed.segments)} segments")
 
     # 决定返回哪个字幕
     transcript = None
@@ -516,7 +517,7 @@ async def fetch_youtube_subtitles(url: str) -> Optional[dict]:
         # 2026 YouTube 翻译型自动字幕代码是 xx-en 格式（"from English"），
         # 旧版只有 zh-Hans/en，匹配不到 zh-Hans-en/en-en，导致"no subtitles"。
         # 这里同时兼容新（带 -en 后缀）旧格式。
-        SUB_LANGS_2026 = "zh-Hans-en,en-en,zh-Hans,zh-Hant-en,zh-Hant,en"
+        SUB_LANGS_2026 = "zh-Hans-en,en-en,zh-Hans,zh-Hant-en,zh-Hant,en,en-zh-Hans,zh-Hans-zh-Hans,zh-Hant-zh-Hans"
 
         # === 2026 黄金组合（最高优先级，实测最稳）===
         # cookies.txt + android_vr/web_embedded client + --remote-components ejs:github
