@@ -229,15 +229,23 @@ class AudioProcessPipeline:
         # === 阶段 2: 转录 ===
         await self._add_stage(stages, "transcribe", EpisodeStatus.ASR_RUNNING, sync_stages)
 
-        # 优先复用本地已有 transcript，没有才 ASR
-        transcript = await self._load_transcript(episode_id)
+        # 转录来源优先级：
+        # 1. YouTube 字幕（双语合并：英文=原文，中文=翻译，质量最佳）
+        # 2. 本地 checkpoint（resume 场景）
+        # 3. parser 提供的字幕（下载阶段已抓取）
+        # 4. ASR 兜底（无任何字幕时；长音频可能质量差）
+        transcript = await self._try_fetch_subtitles(raw_input, episode_id)
+        if not transcript:
+            transcript = await self._load_transcript(episode_id)
+        if not transcript:
+            transcript = parse_result.extra.get("transcript")
 
         if not transcript:
-            logger.info(f"No local transcript for {episode_id}, using Apple AFM 3")
+            logger.info(f"No subtitle available for {episode_id}, falling back to Apple AFM 3 ASR")
             transcript = await run_asr(parse_result.audio_path, None)
             transcript.episode_id = episode_id
         else:
-            logger.info(f"Using local transcript for {episode_id}, skipping ASR")
+            logger.info(f"Using transcript ({len(transcript.segments)} segments, lang={transcript.language}) for {episode_id}")
             transcript.episode_id = episode_id
             if transcript.language:
                 await EpisodeRepository.update(episode_id, language=transcript.language)
