@@ -227,5 +227,5 @@ def _build_transcript_block(segments: List, max_segments: Optional[int] = None) 
     """构建紧凑格式的字幕块"""
     lines = []
     for seg in segments[:max_segments]:
-        lines.append(f"{seg.id} | {seg.start_ms//1000//60:02d}:{seg.start_ms//1000%60:02d} | {seg.text_original}")
+        lines.append(f"{seg.id} | {seg.start_ms//1000//60:02d}:{seg.start_ms//1000%60:02d} | {seg.text_translated or seg.text_original}")
     return "\n".join(lines)

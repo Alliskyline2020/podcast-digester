@@ -281,7 +281,15 @@ class AudioProcessPipeline:
         await self._complete_stage(stages, "summarize", completed_stages, sync_stages)
 
         # === 阶段 5: 翻译（可选）===
-        if transcript.language != "zh":
+        # 流程：双语字幕（YouTube 中英都有）合并后 text_translated 已有中文 → 跳过 LLM 翻译；
+        # 只有英文单语（text_translated 多数为空）才 translate（英文→中文）。
+        # 最终用户看中文，下游 split/summary/highlight/insights 统一用 text_translated 优先。
+        _translated_ratio = (
+            sum(1 for s in transcript.segments if s.text_translated) /
+            max(len(transcript.segments), 1)
+        )
+        if transcript.language != "zh" and _translated_ratio < 0.5:
+            logger.info(f"Translate needed (translated ratio {_translated_ratio:.0%})")
             await self._add_stage(stages, "translate", EpisodeStatus.LLM_RUNNING, sync_stages)
 
             translations = await translate_segments(
@@ -807,7 +815,8 @@ class AudioProcessPipeline:
             logger.info(f"Summaries already exist for {episode_id}")
 
         # === 阶段 5: 翻译（如需要）===
-        if transcript.language != "zh" and not existing.get('translated'):
+        _translated_ratio = sum(1 for s in transcript.segments if s.text_translated) / max(len(transcript.segments), 1)
+        if transcript.language != "zh" and _translated_ratio < 0.5 and not existing.get('translated'):
             await self._add_stage(stages, "translate", EpisodeStatus.LLM_RUNNING, sync_stages)
 
             translations = await translate_segments(

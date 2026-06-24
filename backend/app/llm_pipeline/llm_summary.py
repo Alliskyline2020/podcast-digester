@@ -48,7 +48,7 @@ async def generate_chapter_summary(
         chapter_segs = chapter_segs[::step]
 
     seg_block = "\n".join(
-        f"{seg.id} | {seg.text_original if not force_translate or not seg.text_translated else seg.text_translated}"
+        f"{seg.id} | {seg.text_translated or seg.text_original}"
         for seg in chapter_segs
     )
 
