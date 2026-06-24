@@ -122,11 +122,16 @@ async def render_pdf_from_html(
             await page.wait_for_load_state('networkidle', timeout=timeout)
             # 强制 screen 媒体，让模板的浅色/深色样式生效（默认 pdf 走 print）
             await page.emulate_media(media='screen')
+            # 单页 PDF：宽度匹配 HTML，高度=内容实际高度，不分页、完整保留 HTML 样式
+            width = await page.evaluate('document.body.scrollWidth')
+            height = await page.evaluate('document.body.scrollHeight')
             await page.pdf(
                 path=str(output_path),
                 print_background=True,
-                format='A4',
-                margin={'top': '16mm', 'bottom': '16mm', 'left': '12mm', 'right': '12mm'},
+                width=f'{max(int(width), 1080)}px',
+                height=f'{int(height) + 32}px',  # +32px 底部留白避免边缘截断
+                margin={'top': '0', 'bottom': '0', 'left': '0', 'right': '0'},
+                prefer_css_page_size=False,
             )
             logger.info(f"PDF rendered successfully: {output_path}")
             return output_path

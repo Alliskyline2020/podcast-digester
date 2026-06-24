@@ -30,14 +30,6 @@
             <line x1="12" y1="15" x2="12" y2="3"/>
           </svg>
         </button>
-        <!-- 打印 / 保存为 PDF：调浏览器原生打印，排版完全用本页 CSS -->
-        <button @click="handlePrint" class="icon-btn no-print" title="打印 / 保存为 PDF">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <polyline points="6 9 6 2 18 2 18 9"/>
-            <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/>
-            <rect x="6" y="14" width="12" height="8"/>
-          </svg>
-        </button>
       </div>
     </header>
 
@@ -537,9 +529,6 @@ const startResize = (e) => {
 }
 const expandedChapter = ref(-1)
 const showExportModal = ref(false)
-// 调浏览器原生打印对话框（用户选"保存为 PDF"即可导出），
-// 配合 @media print CSS 隐藏控件、只留摘要/金句/洞察内容
-const handlePrint = () => window.print()
 const showTranscriptEditor = ref(false)
 // isMappingExpanded 已移除 - 不再需要映射展开状态
 
@@ -1985,44 +1974,6 @@ onUnmounted(() => {
   }
 }
 
-/* ========== 打印 / 保存为 PDF ==========
-   点打印按钮调浏览器原生打印（handlePrint），隐藏控件只留内容。
-   用户切到目标 tab（如"摘要+金句"）后点打印按钮，打印对话框里选"保存为 PDF"。
-*/
-@media print {
-  /* 隐藏所有控件、导航、音频、快捷键栏 */
-  .player-header,
-  .audio-section,
-  .tab-header,
-  .shortcuts-bar,
-  .language-toggles,
-  .transcript-header,
-  .no-print {
-    display: none !important;
-  }
-  /* 内容区铺满，去掉 padding/background/max-width 限制 */
-  .player-view {
-    padding: 0 !important;
-    margin: 0 !important;
-    max-width: none !important;
-    background: white !important;
-  }
-  .tab-content,
-  .insights-content {
-    display: block !important;
-    max-height: none !important;
-    overflow: visible !important;
-    padding: 0 !important;
-  }
-  /* 卡片避免跨页断裂 */
-  .highlight-card,
-  .insight-card,
-  .chapter-summary,
-  .insight-section {
-    break-inside: avoid;
-    page-break-inside: avoid;
-  }
-}
 </style>
 
 <style scoped>
