@@ -236,9 +236,9 @@
                 @click="applyGlossaryAll"
                 :disabled="applyingGlossary"
                 class="toolbar-btn toolbar-btn-primary"
-                title="LLM 全篇纠错(耗时几十秒)"
+                title="全局应用词库:对字幕+章节+摘要+金句+洞察做字符串替换(几秒完成,不调 LLM)"
               >
-                {{ applyingGlossary ? '⏳ 纠错中...' : '⚡ 批量纠错' }}
+                {{ applyingGlossary ? '⏳ 纠错中...' : '⚡ 全局词库纠错' }}
               </button>
             </div>
           </div>
@@ -910,23 +910,39 @@ const removeGlossary = async (correct) => {
   }
 }
 
-// 批量词库纠错(LLM,带 loading)
+// 批量词库纠错(纯字符串替换,不调 LLM,几秒完成)
+// 对 transcript + outline + summaries + highlight + product_insights 全局应用
 const applyGlossaryAll = async () => {
   if (applyingGlossary.value) return
   applyingGlossary.value = true
-  glossaryNotice.value = '⏳ LLM 正在全篇纠错,这需要几十秒...'
+  glossaryNotice.value = '⏳ 正在全局应用词库(字幕+摘要+金句+洞察)...'
   try {
     const result = await api.applyGlossary(episodeId.value)
     const n = result?.corrected_segments ?? 0
-    glossaryNotice.value = n > 0
-      ? `✅ 纠错完成,修复了 ${n} 条字幕`
-      : '✅ 没有发现需要纠错的内容'
-    await loadEpisode()   // 刷新字幕数据
+    const mods = result?.modules_corrected || {}
+    const modTotal = Object.values(mods).reduce((a, b) => a + (Number(b) || 0), 0)
+
+    if (n > 0 || modTotal > 0) {
+      const parts = [`字幕 ${n} 条`]
+      const modLabels = {
+        outline: '章节',
+        summaries: '摘要',
+        highlight: '金句',
+        product_insights: '洞察',
+      }
+      for (const [k, v] of Object.entries(mods)) {
+        if (Number(v) > 0) parts.push(`${modLabels[k] || k} ${v} 处`)
+      }
+      glossaryNotice.value = `✅ 全局纠错完成:${parts.join(' · ')}`
+    } else {
+      glossaryNotice.value = '✅ 没有发现需要纠错的内容'
+    }
+    await loadEpisode()   // 刷新字幕 + 下游产物数据
   } catch (e) {
     glossaryNotice.value = '❌ 纠错失败:' + (e.message || '')
   } finally {
     applyingGlossary.value = false
-    setTimeout(() => { glossaryNotice.value = '' }, 4000)
+    setTimeout(() => { glossaryNotice.value = '' }, 5000)
   }
 }
 

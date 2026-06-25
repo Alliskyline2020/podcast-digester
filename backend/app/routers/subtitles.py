@@ -51,6 +51,9 @@ class CorrectTranscriptResponse(BaseModel):
     total_segments: int
     corrected_segments: int
     duration_ms: int
+    # 下游产物(outline/summaries/highlight/product_insights)的纠错字段数
+    # 词库驱动的纯字符串替换,不调 LLM。None = 没触发(老行为)。
+    modules_corrected: Optional[dict] = None
 
 
 class UpdateSegmentRequest(BaseModel):
@@ -543,7 +546,7 @@ async def apply_glossary_to_episode(episode_id: str) -> CorrectTranscriptRespons
         raise HTTPException(status_code=400, detail="字幕数据为空，无法应用词库纠错")
 
     # 4. 使用词库纠正
-    from ..services.glossary import get_glossary
+    from ..services.glossary import get_glossary, apply_glossary_to_all_modules
     glossary = get_glossary(deps.data_dir)
 
     corrected_data, corrected_count = glossary.correct_transcript(transcript_dict)
@@ -551,11 +554,20 @@ async def apply_glossary_to_episode(episode_id: str) -> CorrectTranscriptRespons
     # 5. 更新数据库中的transcript
     await EpisodeRepository.update_transcript(episode_id, corrected_data)
 
+    # 6. 同步词库到所有下游产物(outline/summaries/highlight/product_insights)
+    # 专有名词纠错是词级替换,语义不变,纯字符串替换即可,不需要 LLM 重算。
+    # 字幕编辑后下游产物会过期,这里一次性把同样的替换应用到所有模块。
+    media_dir = deps.data_dir / "media" / episode_id
+    modules_corrected = apply_glossary_to_all_modules(glossary, media_dir)
+
     duration_ms = int((time.time() - start_time) * 1000)
 
-    logger.info(f"[Glossary Apply] Episode {episode_id}: {corrected_count}/{total_segments} segments corrected")
+    logger.info(
+        f"[Glossary Apply] Episode {episode_id}: transcript {corrected_count}/{total_segments} segments, "
+        f"downstream modules {modules_corrected}"
+    )
 
-    # 6. 如果有纠正，同步到其他模块（不包括paragraph_mappings，因为词库纠错不改段落结构）
+    # 7. 如果字幕有纠正，同步 paragraph_mappings（不改段落结构）
     if corrected_count > 0:
         create_background_task(
             sync_episode_modules(episode_id, corrected_data["segments"], regenerate_paragraphs=False),
@@ -566,7 +578,8 @@ async def apply_glossary_to_episode(episode_id: str) -> CorrectTranscriptRespons
         episode_id=episode_id,
         total_segments=total_segments,
         corrected_segments=corrected_count,
-        duration_ms=duration_ms
+        duration_ms=duration_ms,
+        modules_corrected=modules_corrected,
     )
 
 

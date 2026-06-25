@@ -23,32 +23,26 @@ class Glossary:
         self._load()
 
     def _load(self):
-        """加载词库（从数据库）"""
-        # 异步加载在第一次调用时执行
-        import asyncio
-        try:
-            # 尝试获取运行中的事件循环
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # 如果在异步上下文中，创建任务
-                asyncio.create_task(self._async_load())
-            else:
-                # 如果没有运行中的循环，直接运行
-                loop.run_until_complete(self._async_load())
-        except RuntimeError:
-            # 如果没有事件循环，使用同步方式
-            import sqlite3
-            import json
-            from app.config import DB_PATH
+        """加载词库（同步,直接 sqlite3 读)。
 
-            # 用 with 确保 conn 在任何路径下都被关闭
+        原实现用 asyncio.create_task fire-and-forget,在 FastAPI 异步上下文里
+        __init__ 立即返回时 cache 还是空的,首次 get_entries() 拿到 0 条。
+        改成同步读取,确保 cache 在 __init__ 后立即可用。
+        """
+        import sqlite3
+        import json
+        import logging
+        from app.config import DB_PATH
+
+        self.cache = {}
+        try:
             with sqlite3.connect(DB_PATH) as conn:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.execute("SELECT correct, wrong_list FROM glossary")
-                rows = cursor.fetchall()
-                self.cache = {}
-                for row in rows:
+                for row in cursor.fetchall():
                     self.cache[row['correct']] = json.loads(row['wrong_list'])
+        except Exception as e:
+            logging.getLogger(__name__).warning(f"glossary 加载失败: {e}")
 
     async def _async_load(self):
         """异步加载词库"""
@@ -61,31 +55,27 @@ class Glossary:
         pass
 
     def add_entry(self, correct: str, wrong: List[str]) -> None:
-        """
-        添加词库条目（同步版本，用于兼容）
+        """添加词库条目(同步)。
 
-        Args:
-            correct: 正确的词汇
-            wrong: 错误的词汇列表
+        原实现用 asyncio.create_task fire-and-forget,router async handler
+        调用时实际没等待,cache 不更新,DB 写也可能丢失。改成同步 sqlite3。
         """
-        import asyncio
+        import sqlite3
+        import json
+        import logging
+        from app.config import DB_PATH
+        from datetime import datetime
+
+        # 合并已存在条目
+        if correct in self.cache:
+            existing = set(self.cache[correct])
+            existing.update(wrong)
+            wrong = list(existing)
+
+        now = datetime.now().isoformat()
+        wrong_json = json.dumps(wrong, ensure_ascii=False)
+
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.create_task(self._async_add_entry(correct, wrong))
-            else:
-                loop.run_until_complete(self._async_add_entry(correct, wrong))
-        except RuntimeError:
-            # 回退到同步操作
-            import sqlite3
-            import json
-            from app.config import DB_PATH
-            from datetime import datetime
-
-            now = datetime.now().isoformat()
-            wrong_json = json.dumps(wrong, ensure_ascii=False)
-
-            # with 语句会在退出块时自动 commit/rollback，并关闭连接资源
             with sqlite3.connect(DB_PATH) as conn:
                 conn.execute(
                     """
@@ -97,33 +87,28 @@ class Glossary:
                     """,
                     (correct, wrong_json, now, now)
                 )
+            # 同步更新 cache,立即可读
+            self.cache[correct] = wrong
+        except Exception as e:
+            logging.getLogger(__name__).warning(f"glossary add_entry 失败: {e}")
 
-    async def _async_add_entry(self, correct: str, wrong: List[str]) -> None:
-        """异步添加词库条目"""
-        from app.repositories import GlossaryRepository
+    def remove_entry(self, correct: str) -> None:
+        """删除词库条目(同步)。
 
-        if correct in self.cache:
-            # 合并已存在的条目
-            existing = set(self.cache[correct])
-            existing.update(wrong)
-            wrong = list(existing)
-
-        await GlossaryRepository.add_entry(correct, wrong)
-        # 更新缓存
-        self.cache[correct] = await GlossaryRepository.get_entry(correct)
-
-    async def remove_entry(self, correct: str) -> None:
+        原实现是 async,但 router 没 await(直接 glossary.remove_entry(correct)),
+        返回的 coroutine 被丢弃 → 完全不工作。改成同步。
         """
-        删除词库条目
+        import sqlite3
+        import logging
+        from app.config import DB_PATH
 
-        Args:
-            correct: 要删除的正确词汇
-        """
-        from app.repositories import GlossaryRepository
-
-        await GlossaryRepository.remove_entry(correct)
-        if correct in self.cache:
-            del self.cache[correct]
+        try:
+            with sqlite3.connect(DB_PATH) as conn:
+                conn.execute("DELETE FROM glossary WHERE correct = ?", (correct,))
+            if correct in self.cache:
+                del self.cache[correct]
+        except Exception as e:
+            logging.getLogger(__name__).warning(f"glossary remove_entry 失败: {e}")
 
     def correct_text(self, text: str) -> str:
         """
@@ -151,15 +136,12 @@ class Glossary:
 
         return result
 
-    async def correct_transcript(self, transcript_data: dict) -> tuple[dict, int]:
-        """
-        使用词库纠正转录文本
+    def correct_transcript(self, transcript_data: dict) -> tuple[dict, int]:
+        """使用词库纠正转录文本(同步)。
 
-        Args:
-            transcript_data: 转录数据字典
-
-        Returns:
-            (纠正后的transcript_data, 纠正的segment数量)
+        原实现是 async,但 routers/subtitles.py 的 apply_glossary_to_episode
+        同步调用(await 缺失),导致 cannot unpack coroutine 报 500。
+        纯字符串操作不需要 async,改成同步。
         """
         segments = transcript_data.get("segments", [])
         corrected_count = 0

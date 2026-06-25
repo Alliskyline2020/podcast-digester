@@ -280,12 +280,17 @@ export async function getGlossary() {
 
 /**
  * 添加词库条目
+ *
+ * 注意:后端 GlossaryEntry 模型要求 wrong 是 list[str]，
+ * 但调用方(如 PlayerView 的词库面板)习惯传单个字符串。
+ * 这里统一包装成数组,避免 422 校验错误。
  */
 export async function addGlossaryEntry({ correct, wrong }) {
+  const wrongs = Array.isArray(wrong) ? wrong : [wrong]
   const res = await fetchWithTimeout(`${API_BASE}/glossary/add`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ correct, wrong })
+    body: JSON.stringify({ correct, wrong: wrongs })
   })
   if (!res.ok) throw new Error('添加词库条目失败')
   return await res.json()

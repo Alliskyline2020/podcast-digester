@@ -197,3 +197,126 @@ def get_glossary(data_dir: Path = None) -> Glossary:
         _glossary_instance = DBGlossary(data_dir)
 
     return _glossary_instance
+
+
+def apply_glossary_to_all_modules(
+    glossary: "Glossary",
+    episode_media_dir: Path,
+) -> dict:
+    """对 episode 的所有下游产物(outline/summaries/highlight/product_insights)
+    应用词库字符串替换。
+
+    用于字幕编辑后的下游同步:专有名词纠错(姚顺雨→姚顺宇)是词级替换,
+    语义不变,不需要 LLM 重算,纯字符串替换即可。
+
+    Args:
+        glossary: 词库实例(用 correct_text 方法)
+        episode_media_dir: data/media/{episode_id}/ 目录
+
+    Returns:
+        {module_name: corrected_count} 各模块纠正的字段数
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    counts = {}
+
+    def correct_str(s):
+        if not isinstance(s, str) or not s:
+            return s, False
+        new = glossary.correct_text(s)
+        return new, new != s
+
+    def correct_list(items):
+        n = 0
+        for i, s in enumerate(items):
+            new, changed = correct_str(s)
+            if changed:
+                items[i] = new
+                n += 1
+        return n
+
+    # 1. outline.json(章节标题)
+    try:
+        f = episode_media_dir / "outline.json"
+        if f.exists():
+            data = json.loads(f.read_text(encoding="utf-8"))
+            entries = data.get("entries", []) if isinstance(data, dict) else data
+            n = 0
+            for e in entries:
+                new_title, changed = correct_str(e.get("title_zh"))
+                if changed:
+                    e["title_zh"] = new_title
+                    n += 1
+            f.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            counts["outline"] = n
+    except Exception as e:
+        logger.warning(f"outline 词库应用失败: {e}")
+        counts["outline"] = 0
+
+    # 2. summaries.json(章节摘要 + key_points)
+    try:
+        f = episode_media_dir / "summaries.json"
+        if f.exists():
+            data = json.loads(f.read_text(encoding="utf-8"))
+            entries = data if isinstance(data, list) else data.get("entries", [])
+            n = 0
+            for e in entries:
+                new_content, changed = correct_str(e.get("content_zh"))
+                if changed:
+                    e["content_zh"] = new_content
+                    n += 1
+                n += correct_list(e.get("key_points_zh", []))
+            f.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            counts["summaries"] = n
+    except Exception as e:
+        logger.warning(f"summaries 词库应用失败: {e}")
+        counts["summaries"] = 0
+
+    # 3. highlight.json(TL;DR + 目标受众 + 每条亮点的 text_zh/why_zh)
+    try:
+        f = episode_media_dir / "highlight.json"
+        if f.exists():
+            data = json.loads(f.read_text(encoding="utf-8"))
+            n = 0
+            for field in ["tldr_zh", "target_audience_zh"]:
+                new_v, changed = correct_str(data.get(field))
+                if changed:
+                    data[field] = new_v
+                    n += 1
+            for hl in data.get("highlights", []):
+                for field in ["text_zh", "why_zh"]:
+                    new_v, changed = correct_str(hl.get(field))
+                    if changed:
+                        hl[field] = new_v
+                        n += 1
+            f.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            counts["highlight"] = n
+    except Exception as e:
+        logger.warning(f"highlight 词库应用失败: {e}")
+        counts["highlight"] = 0
+
+    # 4. product_insights.json(三个模块的 text_zh/rationale_zh + 提到的公司/技术)
+    try:
+        f = episode_media_dir / "product_insights.json"
+        if f.exists():
+            data = json.loads(f.read_text(encoding="utf-8"))
+            n = 0
+            for module in ["product", "technical", "market"]:
+                items = data.get(module, {}).get("items", [])
+                for item in items:
+                    for field in ["text_zh", "rationale_zh"]:
+                        new_v, changed = correct_str(item.get(field))
+                        if changed:
+                            item[field] = new_v
+                            n += 1
+            n += correct_list(data.get("mentioned_companies", []))
+            n += correct_list(data.get("mentioned_technologies", []))
+            f.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            counts["product_insights"] = n
+    except Exception as e:
+        logger.warning(f"product_insights 词库应用失败: {e}")
+        counts["product_insights"] = 0
+
+    logger.info(f"[Glossary Apply All] {episode_media_dir.name}: {counts}")
+    return counts
