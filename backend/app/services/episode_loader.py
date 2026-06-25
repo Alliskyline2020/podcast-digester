@@ -55,7 +55,27 @@ logger = logging.getLogger(__name__)
 # ==================== 快速加载助手 ====================
 
 def load_highlight_fast(episode_id: str) -> Optional[dict]:
-    """快速加载 highlight（仅基础字段）"""
+    """快速加载 highlight(优先 DB, fallback 文件)。
+
+    必须与 load_episode_bundle(详情 API 用)保持相同的数据源优先级,
+    否则列表卡片和播放器详情页会显示不一致的 tldr_zh。
+    DB 优先,fallback 文件。
+    """
+    import sqlite3
+    import json
+    from app.config import DB_PATH
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT highlights_json FROM highlight WHERE episode_id = ?",
+                (episode_id,)
+            ).fetchone()
+            if row and row["highlights_json"]:
+                return json.loads(row["highlights_json"])
+    except Exception:
+        pass
+    # fallback 文件
     highlight_file = deps.data_dir / "media" / episode_id / "highlight.json"
     return safe_read_json(highlight_file)
 
