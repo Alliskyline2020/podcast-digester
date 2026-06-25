@@ -266,7 +266,11 @@ def _build_subtitle_command(
     """
     cmd = YTDLP_CMD + [
         "--write-subs",
-        "--write-auto-subs",  # Fallback to auto subs if manual subs not available
+        # NOTE: --write-auto-subs 已禁用 (2026-06-25)
+        # YouTube 自动字幕质量不可控，对低质量音频会产出 ", , ," 这类垃圾数据。
+        # 没有 manual CC 时让 yt-dlp 直接 fail，由 pipeline.py 的 ASR 兜底处理。
+        # 若需临时恢复调查，取消下一行注释即可：
+        # "--write-auto-subs",
         "--skip-download",
         "--sub-lang", sub_langs,
         "--sub-format", "vtt",

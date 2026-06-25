@@ -332,7 +332,7 @@ async def delete_episode(episode_id: str) -> DeleteResponse:
         except Exception as e:
             logger.warning(f"Failed to delete media files for {episode_id}: {e}")
 
-    return DeleteResponse(deleted=episode_id)
+    return DeleteResponse(success=True, episode_id=episode_id)
 
 
 

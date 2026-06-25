@@ -416,12 +416,76 @@ class AudioProcessPipeline:
                 logger.info(f"Attempting to fetch YouTube subtitles for {episode_id}")
                 transcript = await fetch_youtube_subtitles(raw_input)
                 if transcript and len(transcript.segments) > 5:
-                    logger.info(f"Successfully fetched {len(transcript.segments)} subtitle segments")
+                    # 质量门控：拦截 YouTube 自动字幕的垃圾数据
+                    # (", , ," 纯逗号 / 大量空洞 / 极低覆盖率)。
+                    # 残缺字幕会让下游 LLM 在 49 个碎片上幻觉合成，
+                    # 产出"看似成功实则全错"的摘要/亮点。
+                    is_valid, reason = self._validate_subtitle_quality(transcript)
+                    if not is_valid:
+                        logger.warning(
+                            f"Subtitle quality check FAILED for {episode_id} "
+                            f"({reason}), falling back to ASR"
+                        )
+                        return None
+                    logger.info(
+                        f"Successfully fetched {len(transcript.segments)} subtitle segments "
+                        f"(quality OK)"
+                    )
                     return transcript
             except Exception as e:
                 logger.warning(f"YouTube subtitle fetch failed: {e}")
 
         return None
+
+    @staticmethod
+    def _validate_subtitle_quality(transcript) -> tuple[bool, str]:
+        """检测 YouTube 自动字幕的垃圾数据，避免下游 LLM 基于残缺输入产生幻觉。
+
+        三道门控任一命中即判定不可用：
+        1. 垃圾段比例 > 30%（text_original 去掉逗号/句号/空白后 < 3 字符）
+        2. 平均 segment 间隔 > 30 秒（章节之间存在大量空洞）
+        3. 字幕覆盖率 < 30%（基于首末 segment 的跨度，不依赖 ffprobe）
+
+        Returns:
+            (is_valid, reason) - is_valid=False 时 reason 描述命中哪个门控
+        """
+        segments = transcript.segments
+        if not segments:
+            return False, "no segments"
+
+        n = len(segments)
+
+        # 1. 垃圾段比例
+        junk_count = 0
+        for seg in segments:
+            text = (seg.text_original or "").replace(",", "").replace(".", "").strip()
+            if len(text) < 3:
+                junk_count += 1
+        junk_ratio = junk_count / n
+        if junk_ratio > 0.3:
+            return False, f"junk_ratio={junk_ratio:.0%} ({junk_count}/{n})"
+
+        # 2. 平均间隔（相邻 segment 之间的空洞）
+        if n >= 2:
+            gaps = []
+            for i in range(1, n):
+                gap = segments[i].start_ms - segments[i - 1].end_ms
+                if gap > 0:
+                    gaps.append(gap)
+            if gaps:
+                avg_gap_ms = sum(gaps) / len(gaps)
+                if avg_gap_ms > 30_000:
+                    return False, f"avg_gap={avg_gap_ms / 1000:.0f}s"
+
+        # 3. 覆盖率（总 speech 时长 / 首末跨度）
+        total_speech = sum(s.end_ms - s.start_ms for s in segments)
+        span_ms = segments[-1].end_ms - segments[0].start_ms
+        if span_ms > 0:
+            coverage = total_speech / span_ms
+            if coverage < 0.3:
+                return False, f"coverage={coverage:.0%}"
+
+        return True, ""
 
     async def _load_transcript(self, episode_id: str) -> Optional[Transcript]:
         """从文件加载 transcript"""

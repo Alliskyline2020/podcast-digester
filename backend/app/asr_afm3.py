@@ -245,13 +245,17 @@ async def run_asr(
     # 获取Apple ASR实例
     asr = get_apple_asr()
 
-    # 执行转录。
-    # 默认 en-US：AFM 模型的输出语种 = locale 语种（zh-CN 会把英文音频直接译成中文，
-    # 不是"原语种转录"）。英文音频→英文原文→下游 translate 阶段译成中文。
-    # 中文音频需要调用方传 language="zh-CN"（目前 pipeline 未做语种探测，后续可加）。
+    # 前置语种探测：YouTube metadata 通常没有 language 字段（实测 NA），
+    # 而 AFM 3 的 locale 决定输出语种——用错 locale 会在中文音频上产出 ", , ," 垃圾。
+    # 用前 60 秒短样本判断真实语种，避免跑完完整音频才发现用错。
+    # AFM 3 跑 60 秒音频 < 5s，探测成本远低于"跑完整后再重跑"。
+    locale = await _probe_audio_language(audio_path, asr)
+    logger.info(f"   探测语种: {locale}")
+
+    # 用选中的 locale 跑完整音频（只跑一次）
     transcript = await asr.transcribe(
         audio_path,
-        language="en-US",
+        language=locale,
         on_progress=on_progress
     )
 
@@ -261,3 +265,62 @@ async def run_asr(
         on_progress(1.0)
 
     return transcript
+
+
+async def _probe_audio_language(audio_path: Path, asr) -> str:
+    """用前 60 秒短样本探测音频语种。
+
+    策略：用 en-US 跑短样本。
+    - 英文音频：en-US 产出正常（segment 多、字符多）→ 继续用 en-US
+    - 中文音频：en-US 产出垃圾（segment 极少）→ 改用 zh-CN
+
+    这样完整音频只需跑一次（vs 后置兜底要跑两次）。
+
+    Returns:
+        "en-US" 或 "zh-CN"。探测失败默认 en-US（原行为）。
+    """
+    import tempfile
+    import os
+    sample_path: Optional[str] = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            sample_path = f.name
+
+        # ffmpeg 提取前 60 秒，转 16kHz mono wav（bridge 对 wav 兼容性最好）
+        result = subprocess.run(
+            ["ffmpeg", "-y", "-i", str(audio_path), "-t", "60",
+             "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", sample_path],
+            capture_output=True, timeout=30,
+        )
+        if result.returncode != 0:
+            logger.warning(
+                f"短样本提取失败，默认 en-US：{result.stderr.decode()[:200]}"
+            )
+            return "en-US"
+
+        probe = await asr.transcribe(Path(sample_path), language="en-US")
+        total_chars = sum(len(s.text_original or "") for s in probe.segments)
+
+        # 60 秒英文音频应产出 >= 5 segment 且 >= 200 字符。
+        # 低于阈值视为 en-US 失败（多半是中文音频被当英文处理）。
+        if len(probe.segments) >= 5 and total_chars >= 200:
+            logger.info(
+                f"短样本探测：en-US 正常 ({len(probe.segments)} segs, "
+                f"{total_chars} chars) → 英文音频"
+            )
+            return "en-US"
+        else:
+            logger.info(
+                f"短样本探测：en-US 疑似垃圾 ({len(probe.segments)} segs, "
+                f"{total_chars} chars) → 中文音频，改用 zh-CN"
+            )
+            return "zh-CN"
+    except Exception as e:
+        logger.warning(f"语种探测异常 ({e})，默认 en-US")
+        return "en-US"
+    finally:
+        if sample_path:
+            try:
+                os.unlink(sample_path)
+            except OSError:
+                pass
