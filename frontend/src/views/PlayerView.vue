@@ -22,13 +22,6 @@
         </span>
       </div>
       <div class="header-actions">
-        <!-- 编辑字幕按钮 -->
-        <button @click="showTranscriptEditor = true" class="icon-btn" title="编辑字幕">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-          </svg>
-        </button>
         <!-- 导出按钮 -->
         <button @click="showExportModal = true" class="icon-btn no-print" title="导出摘要">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -209,7 +202,77 @@
               当前为原始 ASR 文本。可尝试使用"术语纠错"或"LLM 纠正"功能补救。
             </span>
           </div>
-          <div class="transcript-header">
+          <!-- 字幕编辑工具栏(只在 transcript tab 显示) -->
+          <div class="subtitle-toolbar">
+            <div class="toolbar-group">
+              <button
+                @click="editMode = !editMode"
+                :class="{ active: editMode }"
+                class="toolbar-btn"
+                :title="editMode ? '退出编辑(回到段落视图)' : '进入单句编辑模式'"
+              >
+                {{ editMode ? '✏️ 编辑中 · 点击退出' : '✏️ 编辑模式' }}
+              </button>
+              <button
+                v-if="editMode"
+                @click="showOnlyErrors = !showOnlyErrors"
+                :class="{ active: showOnlyErrors }"
+                class="toolbar-btn"
+              >
+                🔍 {{ showOnlyErrors ? '显示全部' : '仅显示错误' }}
+              </button>
+            </div>
+            <div class="toolbar-group">
+              <span v-if="editMode" class="toolbar-hint">{{ editableSegments.length }} 条单句</span>
+              <button
+                @click="showGlossary = !showGlossary"
+                :class="{ active: showGlossary }"
+                class="toolbar-btn"
+                title="管理词库"
+              >
+                📚 词库
+              </button>
+              <button
+                @click="applyGlossaryAll"
+                :disabled="applyingGlossary"
+                class="toolbar-btn toolbar-btn-primary"
+                title="LLM 全篇纠错(耗时几十秒)"
+              >
+                {{ applyingGlossary ? '⏳ 纠错中...' : '⚡ 批量纠错' }}
+              </button>
+            </div>
+          </div>
+
+          <!-- 反馈通知(保存/纠错结果) -->
+          <div v-if="glossaryNotice" class="glossary-notice">{{ glossaryNotice }}</div>
+
+          <!-- 词库面板(可折叠) -->
+          <div v-if="showGlossary" class="glossary-panel">
+            <div class="glossary-add-row">
+              <input v-model="newGlossaryWrong" placeholder="错误词(如:姚顺雨)" class="glossary-input" />
+              <span class="glossary-arrow">→</span>
+              <input v-model="newGlossaryCorrect" placeholder="正确词(如:姚顺宇)" class="glossary-input" />
+              <button
+                @click="addGlossaryEntry"
+                :disabled="!newGlossaryWrong.trim() || !newGlossaryCorrect.trim()"
+                class="glossary-add-btn"
+              >
+                添加
+              </button>
+            </div>
+            <div v-if="Object.keys(glossary).length > 0" class="glossary-list">
+              <div v-for="(wrongs, correct) in glossary" :key="correct" class="glossary-entry">
+                <span class="glossary-correct">{{ correct }}</span>
+                <span class="glossary-arrow">←</span>
+                <span class="glossary-wrongs">{{ Array.isArray(wrongs) ? wrongs.join(', ') : wrongs }}</span>
+                <button @click="removeGlossary(correct)" class="glossary-del" title="删除">×</button>
+              </div>
+            </div>
+            <p v-else class="glossary-empty">词库为空。添加条目后,字幕中匹配的错误词会自动标记 ⚠️</p>
+          </div>
+
+          <!-- 字幕头部(语言切换,只在只读模式显示) -->
+          <div v-if="!editMode" class="transcript-header">
             <div class="subtitle-info">
               <span class="subtitle-count">{{ formatTime(segments[segments.length - 1]?.end_ms || 0) }}</span>
             </div>
@@ -243,10 +306,12 @@
           <div
             ref="transcriptContainer"
             class="transcript-content"
-            v-if="paragraphs.length > 0"
+            v-if="paragraphs.length > 0 || segments.length > 0"
             @scroll="handleUserScroll"
           >
+            <!-- 只读模式:段落视图(用户友好) -->
             <DynamicScroller
+              v-if="!editMode"
               ref="transcriptScroller"
               :items="paragraphs"
               :min-item-size="60"
@@ -271,6 +336,58 @@
                     <span v-if="subtitleLang === 'original' || subtitleLang === 'both'" class="block-text">{{ item.text_clean || item.text_original }}</span>
                     <span v-if="subtitleLang === 'translated' || subtitleLang === 'both'" class="block-translated">{{ item.text_translated || item.text_clean || item.text_original }}</span>
                   </div>
+                </div>
+              </DynamicScrollerItem>
+            </DynamicScroller>
+
+            <!-- 编辑模式:单句 segment 视图(API 对齐,每条可编辑) -->
+            <DynamicScroller
+              v-else
+              ref="transcriptScroller"
+              :items="editableSegments"
+              :min-item-size="50"
+              key-field="id"
+              class="transcript-scroller"
+              v-slot="{ item, index, active }"
+            >
+              <DynamicScrollerItem
+                :item="item"
+                :active="active"
+                :data-index="index"
+              >
+                <div
+                  :key="item.id"
+                  class="segment-row"
+                  :class="{
+                    active: isCurrentSegment(item),
+                    editing: editingId === item.id,
+                    'has-error': hasSegmentError(item)
+                  }"
+                >
+                  <span class="segment-time" @click="localSeekTo(item.start_ms)" :title="`跳到 ${formatTime(item.start_ms)}`">{{ formatTime(item.start_ms) }}</span>
+                  <div class="segment-body">
+                    <textarea
+                      v-if="editingId === item.id"
+                      v-model="editingText"
+                      class="segment-textarea"
+                      rows="2"
+                      @keyup.ctrl.enter="saveEdit(item)"
+                      @keyup.esc="cancelEdit"
+                    />
+                    <span v-else class="segment-text" @click="startEdit(item)" :title="'点击编辑 (Ctrl+Enter 保存)'">
+                      {{ editBuffer[item.id] ?? item.text_original }}
+                    </span>
+                  </div>
+                  <div v-if="editingId === item.id" class="segment-edit-actions">
+                    <button @click="saveEdit(item)" class="seg-btn seg-btn-save">保存</button>
+                    <button @click="cancelEdit" class="seg-btn">取消</button>
+                    <button @click="addCurrentToGlossary(item)" class="seg-btn" title="加入词库(在下方面板填)">📚</button>
+                  </div>
+                  <span
+                    v-else-if="hasSegmentError(item)"
+                    class="segment-error-mark"
+                    title="包含词库错误词"
+                  >⚠️</span>
                 </div>
               </DynamicScrollerItem>
             </DynamicScroller>
@@ -434,21 +551,6 @@
       @close="showExportModal = false"
     />
 
-    <!-- 字幕编辑器 -->
-    <Teleport to="body">
-      <Transition name="modal">
-        <div v-if="showTranscriptEditor" class="transcript-modal-overlay" @click="handleTranscriptEditorClose">
-          <div class="transcript-modal-content" @click.stop>
-            <button @click="handleTranscriptEditorClose" class="modal-close-btn">✕</button>
-            <TranscriptEditor
-              v-if="bundle?.episode?.id"
-              :episode-id="bundle?.episode?.id"
-              @close="handleTranscriptEditorClose"
-            />
-          </div>
-        </div>
-      </Transition>
-    </Teleport>
   </div>
 </template>
 
@@ -456,7 +558,6 @@
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import ExportModal from '@/components/ExportModal.vue'
-import TranscriptEditor from '@/components/TranscriptEditor.vue'
 import EpisodeTags from '@/components/EpisodeTags.vue'
 import * as api from '@/api'
 import { usePlayer } from '@/composables/player'
@@ -537,7 +638,6 @@ const startResize = (e) => {
 }
 const expandedChapter = ref(-1)
 const showExportModal = ref(false)
-const showTranscriptEditor = ref(false)
 // isMappingExpanded 已移除 - 不再需要映射展开状态
 
 // Error states
@@ -689,6 +789,154 @@ const isCurrentParagraph = (para) => {
   return currentTime.value >= para.start_ms && currentTime.value < para.end_ms
 }
 
+// ==================== 字幕 inline 编辑（取代原 TranscriptEditor modal）====================
+// 设计原则:只读模式显示段落(用户友好),编辑模式切换到单句 segment(API 对齐)
+const editMode = ref(false)              // 编辑模式开关
+const editingId = ref(null)              // 当前正在编辑的 segment id
+const editingText = ref('')              // 编辑中的临时文本
+const editBuffer = ref({})               // 已保存的本地修改 {segment_id: newText}(在 bundle 刷新前兜底显示)
+const showOnlyErrors = ref(false)        // 仅显示含错误 segment
+const showGlossary = ref(false)          // 词库面板展开
+const glossary = ref({})                 // 词库 {correct: [wrong, wrong, ...]}
+const newGlossaryWrong = ref('')         // 新词库条目-错误词
+const newGlossaryCorrect = ref('')       // 新词库条目-正确词
+const applyingGlossary = ref(false)      // 批量纠错进行中
+const glossaryNotice = ref('')           // 批量纠错结果反馈
+
+// 单句 segment 是否对应当前播放位置
+const isCurrentSegment = (seg) => {
+  if (!currentTime.value || !seg) return false
+  return currentTime.value >= seg.start_ms && currentTime.value < seg.end_ms
+}
+
+// 检测 segment 是否包含词库错误
+const hasSegmentError = (seg) => {
+  if (!seg?.text_original) return false
+  const text = seg.text_original
+  for (const correct in glossary.value) {
+    for (const wrong of glossary.value[correct] || []) {
+      if (wrong && text.includes(wrong)) return true
+    }
+  }
+  return false
+}
+
+// 编辑模式实际渲染的 segments(支持"仅显示错误"过滤)
+const editableSegments = computed(() => {
+  if (!showOnlyErrors.value) return segments.value
+  return segments.value.filter(hasSegmentError)
+})
+
+// 进入编辑
+const startEdit = (seg) => {
+  editingId.value = seg.id
+  // 优先显示已保存的本地修改
+  editingText.value = editBuffer.value[seg.id] ?? seg.text_original ?? ''
+}
+
+// 取消编辑
+const cancelEdit = () => {
+  editingId.value = null
+  editingText.value = ''
+}
+
+// 保存编辑(调 API + 本地兜底)
+const saveEdit = async (seg) => {
+  const newText = editingText.value.trim()
+  if (!newText || newText === seg.text_original) {
+    cancelEdit()
+    return
+  }
+  try {
+    await api.updateTranscriptSegment(episodeId.value, {
+      segment_index: seg.id,    // 后端用 segment.id(数字索引)
+      text_original: newText,
+      note_to_glossary: false,
+    })
+    // 本地兜底:即使 bundle 还没刷新,编辑区也显示新内容
+    editBuffer.value[seg.id] = newText
+    seg.text_original = newText   // 直接改引用,即时生效
+    cancelEdit()
+  } catch (e) {
+    glossaryNotice.value = '❌ 保存失败:' + (e.message || '未知错误')
+    setTimeout(() => { glossaryNotice.value = '' }, 3000)
+  }
+}
+
+// 把当前编辑句的"错误词→正确词"加入词库
+const addCurrentToGlossary = async (seg) => {
+  // 简化:提示用户在词库面板手动添加(因为自动识别错误词不可靠)
+  showGlossary.value = true
+  newGlossaryWrong.value = ''     // 让用户填
+  newGlossaryCorrect.value = ''
+  glossaryNotice.value = '👇 在下方词库面板填写"错误词→正确词"后添加'
+  setTimeout(() => { glossaryNotice.value = '' }, 3000)
+}
+
+// 加载词库
+const loadGlossary = async () => {
+  try {
+    const data = await api.getGlossary()
+    glossary.value = data?.entries || {}
+  } catch (e) {
+    console.warn('[glossary] 加载失败', e)
+  }
+}
+
+// 添加词库条目
+const addGlossaryEntry = async () => {
+  const wrong = newGlossaryWrong.value.trim()
+  const correct = newGlossaryCorrect.value.trim()
+  if (!wrong || !correct) return
+  try {
+    await api.addGlossaryEntry({ correct, wrong })
+    await loadGlossary()
+    newGlossaryWrong.value = ''
+    newGlossaryCorrect.value = ''
+  } catch (e) {
+    glossaryNotice.value = '❌ 添加失败:' + (e.message || '')
+    setTimeout(() => { glossaryNotice.value = '' }, 3000)
+  }
+}
+
+// 删除词库条目
+const removeGlossary = async (correct) => {
+  try {
+    await api.deleteGlossaryEntry(correct)
+    await loadGlossary()
+  } catch (e) {
+    glossaryNotice.value = '❌ 删除失败:' + (e.message || '')
+    setTimeout(() => { glossaryNotice.value = '' }, 3000)
+  }
+}
+
+// 批量词库纠错(LLM,带 loading)
+const applyGlossaryAll = async () => {
+  if (applyingGlossary.value) return
+  applyingGlossary.value = true
+  glossaryNotice.value = '⏳ LLM 正在全篇纠错,这需要几十秒...'
+  try {
+    const result = await api.applyGlossary(episodeId.value)
+    const n = result?.corrected_segments ?? 0
+    glossaryNotice.value = n > 0
+      ? `✅ 纠错完成,修复了 ${n} 条字幕`
+      : '✅ 没有发现需要纠错的内容'
+    await loadEpisode()   // 刷新字幕数据
+  } catch (e) {
+    glossaryNotice.value = '❌ 纠错失败:' + (e.message || '')
+  } finally {
+    applyingGlossary.value = false
+    setTimeout(() => { glossaryNotice.value = '' }, 4000)
+  }
+}
+
+// 编辑模式开启时确保词库已加载(用于错误检测)
+watch(editMode, (newVal) => {
+  if (newVal && Object.keys(glossary.value).length === 0) {
+    loadGlossary()
+  }
+})
+
 const isCurrentChapter = (index) => {
   if (!currentTime.value || !chapters.value[index]) return false
   const ch = chapters.value[index]
@@ -778,12 +1026,6 @@ const loadEpisode = async () => {
     loadError.value = e
     loadErrorMessage.value = e.message || '加载失败，请稍后重试'
   }
-}
-
-const handleTranscriptEditorClose = async () => {
-  showTranscriptEditor.value = false
-  // 重新加载节目数据以获取更新后的字幕
-  await loadEpisode()
 }
 
 const goBack = () => router.push({ name: 'library' })
@@ -1498,6 +1740,305 @@ onUnmounted(() => {
 
 .punct-warning-text {
   flex: 1;
+}
+
+/* === 字幕编辑工具栏 === */
+.subtitle-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.toolbar-btn {
+  padding: 5px 10px;
+  background: white;
+  color: #4b5563;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.toolbar-btn:hover:not(:disabled) {
+  background: #f3f4f6;
+  border-color: #d1d5db;
+}
+
+.toolbar-btn.active {
+  background: #1f2937;
+  color: white;
+  border-color: #1f2937;
+}
+
+.toolbar-btn-primary {
+  background: #f59e0b;
+  color: white;
+  border-color: #f59e0b;
+}
+
+.toolbar-btn-primary:hover:not(:disabled) {
+  background: #d97706;
+  border-color: #d97706;
+}
+
+.toolbar-btn-primary:disabled,
+.toolbar-btn:disabled {
+  background: #e5e7eb;
+  color: #9ca3af;
+  cursor: not-allowed;
+  border-color: #e5e7eb;
+}
+
+.toolbar-hint {
+  font-size: 11px;
+  color: #9ca3af;
+  margin-right: 4px;
+}
+
+/* === 反馈通知 === */
+.glossary-notice {
+  padding: 6px 12px;
+  margin-bottom: 8px;
+  background: #fef3c7;
+  border: 1px solid #fde68a;
+  border-radius: 4px;
+  font-size: 12px;
+  color: #92400e;
+}
+
+/* === 词库面板 === */
+.glossary-panel {
+  padding: 10px 12px;
+  background: #fafafa;
+  border: 1px solid #ececec;
+  border-radius: 6px;
+  margin-bottom: 8px;
+}
+
+.glossary-add-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.glossary-input {
+  flex: 1;
+  padding: 4px 8px;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.glossary-input:focus {
+  outline: none;
+  border-color: #6b7280;
+}
+
+.glossary-arrow {
+  color: #9ca3af;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.glossary-add-btn {
+  padding: 4px 12px;
+  background: #1f2937;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.glossary-add-btn:disabled {
+  background: #e5e7eb;
+  cursor: not-allowed;
+}
+
+.glossary-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.glossary-entry {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: white;
+  border: 1px solid #f0f0f0;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.glossary-correct {
+  color: #047857;
+  font-weight: 600;
+}
+
+.glossary-wrongs {
+  color: #b45309;
+  flex: 1;
+}
+
+.glossary-del {
+  background: transparent;
+  border: none;
+  color: #9ca3af;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.glossary-del:hover {
+  color: #ef4444;
+}
+
+.glossary-empty {
+  font-size: 11px;
+  color: #9ca3af;
+  margin: 0;
+  font-style: italic;
+}
+
+/* === 单句 segment 编辑行 === */
+.segment-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid #f3f4f6;
+  transition: background 0.15s;
+  position: relative;
+}
+
+.segment-row:hover {
+  background: #fafafa;
+}
+
+.segment-row.active {
+  background: linear-gradient(90deg, #fef3c7 0%, #fef9e7 40%, transparent 100%);
+  border-left: 3px solid #f59e0b;
+  padding-left: 7px;
+}
+
+.segment-row.has-error {
+  background: #fef2f2;
+}
+
+.segment-row.has-error:hover {
+  background: #fee2e2;
+}
+
+.segment-row.editing {
+  background: #eff6ff;
+  border-left: 3px solid #3b82f6;
+  padding-left: 7px;
+}
+
+.segment-time {
+  flex-shrink: 0;
+  font-family: 'SF Mono', Monaco, Consolas, monospace;
+  font-size: 11px;
+  color: #6b7280;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 3px;
+  min-width: 42px;
+}
+
+.segment-time:hover {
+  background: #e5e7eb;
+  color: #1f2937;
+}
+
+.segment-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.segment-text {
+  display: block;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #1f2937;
+  cursor: text;
+  word-break: break-word;
+}
+
+.segment-textarea {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid #3b82f6;
+  border-radius: 4px;
+  font-size: 13px;
+  line-height: 1.5;
+  font-family: inherit;
+  resize: vertical;
+  min-height: 40px;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.segment-textarea:focus {
+  outline: none;
+}
+
+.segment-edit-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.seg-btn {
+  padding: 3px 8px;
+  background: white;
+  color: #4b5563;
+  border: 1px solid #e5e7eb;
+  border-radius: 3px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.seg-btn:hover {
+  background: #f3f4f6;
+}
+
+.seg-btn-save {
+  background: #1f2937;
+  color: white;
+  border-color: #1f2937;
+}
+
+.seg-btn-save:hover {
+  background: #374151;
+}
+
+.segment-error-mark {
+  flex-shrink: 0;
+  font-size: 12px;
+  cursor: help;
 }
 
 .transcript-header {
