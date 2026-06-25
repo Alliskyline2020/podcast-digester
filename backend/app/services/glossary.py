@@ -201,22 +201,27 @@ def get_glossary(data_dir: Path = None) -> Glossary:
 
 def apply_glossary_to_all_modules(
     glossary: "Glossary",
+    episode_id: str,
     episode_media_dir: Path,
 ) -> dict:
     """对 episode 的所有下游产物(outline/summaries/highlight/product_insights)
-    应用词库字符串替换。
+    应用词库字符串替换,同步写文件 + DB。
 
     用于字幕编辑后的下游同步:专有名词纠错(姚顺雨→姚顺宇)是词级替换,
     语义不变,不需要 LLM 重算,纯字符串替换即可。
 
     Args:
         glossary: 词库实例(用 correct_text 方法)
+        episode_id: episode ID(用于 DB 写入)
         episode_media_dir: data/media/{episode_id}/ 目录
 
     Returns:
         {module_name: corrected_count} 各模块纠正的字段数
     """
     import logging
+    import sqlite3
+    from datetime import datetime
+    from app.config import DB_PATH
     logger = logging.getLogger(__name__)
 
     counts = {}
@@ -236,6 +241,26 @@ def apply_glossary_to_all_modules(
                 n += 1
         return n
 
+    def sync_db(table: str, json_field: str, data):
+        """同步写到 DB(复制 DerivedDataRepository.set 的 SQL)。
+
+        episode bundle API 优先从 DB 读,只改文件会导致 API 返回旧数据。
+        """
+        try:
+            json_value = json.dumps(data, ensure_ascii=False)
+            now = datetime.now().isoformat()
+            with sqlite3.connect(DB_PATH) as conn:
+                conn.execute(
+                    f"""INSERT INTO {table} (episode_id, {json_field}_json, updated_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(episode_id) DO UPDATE SET
+                        {json_field}_json = excluded.{json_field}_json,
+                        updated_at = excluded.updated_at""",
+                    (episode_id, json_value, now)
+                )
+        except Exception as e:
+            logger.warning(f"DB 同步 {table} 失败: {e}")
+
     # 1. outline.json(章节标题)
     try:
         f = episode_media_dir / "outline.json"
@@ -249,6 +274,7 @@ def apply_glossary_to_all_modules(
                     e["title_zh"] = new_title
                     n += 1
             f.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            sync_db("outline", "entries", entries)
             counts["outline"] = n
     except Exception as e:
         logger.warning(f"outline 词库应用失败: {e}")
@@ -268,6 +294,7 @@ def apply_glossary_to_all_modules(
                     n += 1
                 n += correct_list(e.get("key_points_zh", []))
             f.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            sync_db("summaries", "summaries", entries)
             counts["summaries"] = n
     except Exception as e:
         logger.warning(f"summaries 词库应用失败: {e}")
@@ -291,6 +318,7 @@ def apply_glossary_to_all_modules(
                         hl[field] = new_v
                         n += 1
             f.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            sync_db("highlight", "highlights", data)
             counts["highlight"] = n
     except Exception as e:
         logger.warning(f"highlight 词库应用失败: {e}")
@@ -313,10 +341,11 @@ def apply_glossary_to_all_modules(
             n += correct_list(data.get("mentioned_companies", []))
             n += correct_list(data.get("mentioned_technologies", []))
             f.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            sync_db("product_insights", "insights", data)
             counts["product_insights"] = n
     except Exception as e:
         logger.warning(f"product_insights 词库应用失败: {e}")
         counts["product_insights"] = 0
 
-    logger.info(f"[Glossary Apply All] {episode_media_dir.name}: {counts}")
+    logger.info(f"[Glossary Apply All] {episode_id}: {counts}")
     return counts

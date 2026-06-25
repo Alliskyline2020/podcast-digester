@@ -558,7 +558,7 @@ async def apply_glossary_to_episode(episode_id: str) -> CorrectTranscriptRespons
     # 专有名词纠错是词级替换,语义不变,纯字符串替换即可,不需要 LLM 重算。
     # 字幕编辑后下游产物会过期,这里一次性把同样的替换应用到所有模块。
     media_dir = deps.data_dir / "media" / episode_id
-    modules_corrected = apply_glossary_to_all_modules(glossary, media_dir)
+    modules_corrected = apply_glossary_to_all_modules(glossary, episode_id, media_dir)
 
     duration_ms = int((time.time() - start_time) * 1000)
 

@@ -111,28 +111,38 @@ class Glossary:
             logging.getLogger(__name__).warning(f"glossary remove_entry 失败: {e}")
 
     def correct_text(self, text: str) -> str:
-        """
-        使用词库纠正文本
+        """使用词库纠正文本(占位符法,避免子串过度替换)。
 
-        Args:
-            text: 原始文本
+        原实现直接 replace,当 wrong 是 correct 的子串时会过度替换:
+        例如 词库 "张小珺 ← 小珺",文本 "张小珺" 里的 "小珺" 会被
+        替换成 "张小珺",变成 "张张小珺"。
 
-        Returns:
-            纠正后的文本
+        修复用三步占位符法:
+        1. 把所有 correct 词替换成唯一占位符(保护它们)
+        2. 替换所有 wrong → 对应 correct(此时占位符不会被错误命中)
+        3. 恢复占位符为 correct
         """
         if not text:
             return text
 
+        # 第一步:保护所有 correct 词(替换成占位符)
+        placeholders = {}
         result = text
+        for i, correct in enumerate(self.cache.keys()):
+            if correct and correct in result:
+                ph = f"\x00PH{i}\x00"
+                placeholders[ph] = correct
+                result = result.replace(correct, ph)
 
-        # 按长度降序排序，优先匹配长词组
-        for correct, wrong_list in sorted(
-            self.cache.items(),
-            key=lambda x: len(x[0]),
-            reverse=True
-        ):
-            for wrong in wrong_list:
-                result = result.replace(wrong, correct)
+        # 第二步:替换 wrong → correct(占位符不受影响)
+        for correct, wrong_list in self.cache.items():
+            for wrong in (wrong_list or []):
+                if wrong and wrong in result:
+                    result = result.replace(wrong, correct)
+
+        # 第三步:恢复占位符
+        for ph, correct in placeholders.items():
+            result = result.replace(ph, correct)
 
         return result
 
