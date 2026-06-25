@@ -371,6 +371,9 @@ class EpisodeCard(BaseModel):
     target_audience_zh: Optional[str] = None
     highlights_count: int = 0
     duration_min: Optional[int] = None
+    # 元信息标签（语种/时长/来源/分类）——用于卡片和播放器头部展示
+    source_type: Optional[str] = Field(None, description="来源平台标签：YouTube/B站/小宇宙/抖音/本地")
+    source_url: Optional[str] = Field(None, description="原始 URL（前端用于推断分类等）")
 
 
 class PasteRequest(BaseModel):

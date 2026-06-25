@@ -184,6 +184,87 @@ async def paste_episode(
 
 
 
+def _source_label_from(raw_input: str, source_type_db: Optional[str] = None) -> str:
+    """从 raw_input URL 或 source_type 数据库字段推断来源平台标签。
+
+    优先按 URL 域名匹配（更准确），匹配不到时 fallback 到 DB 里的 source_type。
+    返回人类可读的标签：YouTube / B站 / 小宇宙 / 抖音 / 本地。
+    """
+    if raw_input:
+        raw = raw_input.lower()
+        if "youtube.com" in raw or "youtu.be" in raw:
+            return "YouTube"
+        if "bilibili.com" in raw:
+            return "B站"
+        if "xiaoyuzhou.com" in raw:
+            return "小宇宙"
+        if "douyin.com" in raw:
+            return "抖音"
+        if raw.startswith(("/", "./", "../")) or os.path.exists(raw_input):
+            return "本地"
+    # URL 匹配不到，fallback 到 DB 字段（youtube/bilibili/...）
+    if source_type_db:
+        mapping = {
+            "youtube": "YouTube",
+            "bilibili": "B站",
+            "xiaoyuzhou": "小宇宙",
+            "xiao_yu_zhou": "小宇宙",
+            "douyin": "抖音",
+            "local": "本地",
+        }
+        return mapping.get(source_type_db.lower(), source_type_db)
+    return ""
+
+
+async def _batch_load_source_labels(
+    episode_ids: List[str],
+) -> Dict[str, tuple[Optional[str], Optional[str]]]:
+    """批量加载 episode 的来源标签和原始 URL。
+
+    先查 source 表（解析器登记），未命中的再 fallback 到 usage_log 的 paste 事件
+    （历史 episode 可能没在 source 表登记，但 paste 时一定记录过 raw_input）。
+
+    Returns:
+        {episode_id: (source_label, raw_input)}。未找到的 episode 不在 dict 里。
+    """
+    if not episode_ids:
+        return {}
+
+    result: Dict[str, tuple[Optional[str], Optional[str]]] = {}
+    placeholders = ",".join("?" * len(episode_ids))
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        # 1. source 表：解析器登记的来源
+        async with db.execute(
+            f"SELECT episode_id, source_type, raw_input FROM source WHERE episode_id IN ({placeholders})",
+            episode_ids,
+        ) as cursor:
+            rows = await cursor.fetchall()
+        for episode_id, source_type_db, raw_input in rows:
+            result[episode_id] = (source_type_db, raw_input)
+
+        # 2. usage_log fallback：历史 episode 的 paste 事件
+        missing = [eid for eid in episode_ids if eid not in result]
+        if missing:
+            placeholders2 = ",".join("?" * len(missing))
+            async with db.execute(
+                f"""SELECT episode_id, payload_json FROM usage_log
+                    WHERE event_type='paste' AND episode_id IN ({placeholders2})
+                    ORDER BY ts DESC""",
+                missing,
+            ) as cursor:
+                rows2 = await cursor.fetchall()
+            for episode_id, payload_json in rows2:
+                if episode_id not in result:  # 取最新一条 paste
+                    result[episode_id] = (None, payload_json)
+
+    # 解析域名得到 label
+    return {
+        eid: (_source_label_from(raw, stype), raw)
+        for eid, (stype, raw) in result.items()
+    }
+
+
 @router.get("/api/episodes", response_model=ListEpisodesResponse)
 async def list_episodes() -> ListEpisodesResponse:
     """
@@ -217,6 +298,9 @@ async def list_episodes() -> ListEpisodesResponse:
     )
     meta_cache = {c.id: meta_results[i] for i, c in enumerate(cards)}
 
+    # 批量加载来源标签（URL 域名解析：YouTube/B站/小宇宙/抖音/本地）
+    source_labels = await _batch_load_source_labels([c.id for c in cards])
+
     # 用预取结果填充 card
     episodes = []
     for card in cards:
@@ -235,6 +319,13 @@ async def list_episodes() -> ListEpisodesResponse:
 
         if not card.duration_min and duration is not None:
             card.duration_min = duration
+
+        # 填充来源标签（语种/时长已有字段，来源需要从 source/usage_log 推断）
+        source_label, raw_input = source_labels.get(card.id, ("", ""))
+        if source_label:
+            card.source_type = source_label
+        if raw_input:
+            card.source_url = raw_input
 
         # 从缓存加载处理进度（进行中时）
         if card.id in progress_cache:
@@ -263,6 +354,14 @@ async def get_episode(episode_id: str) -> EpisodeResponse:
 
     # 加载完整数据
     bundle = await load_episode_bundle(episode_id)
+
+    # 填充来源标签（与 list_episodes 保持一致，DB 里 source_type 字段对历史 episode 是空）
+    source_labels = await _batch_load_source_labels([episode_id])
+    source_label, raw_input = source_labels.get(episode_id, ("", ""))
+    if source_label:
+        bundle.episode.source_type = source_label
+    if raw_input and hasattr(bundle.episode, "source_url"):
+        bundle.episode.source_url = raw_input
 
     return EpisodeResponse(episode=bundle)
 

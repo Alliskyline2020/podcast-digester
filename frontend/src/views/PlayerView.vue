@@ -9,6 +9,13 @@
       </button>
       <div class="title-info">
         <h1 class="episode-title">{{ bundle?.episode?.title || '未知节目' }}</h1>
+        <EpisodeTags
+          :language="bundle?.episode?.language"
+          :source-type="bundle?.episode?.source_type"
+          :title="bundle?.episode?.title"
+          :show="['language', 'source', 'category']"
+          class="header-tags"
+        />
         <span class="episode-meta">
           {{ bundle?.outline?.entries?.length || 0 }} 章节 ·
           {{ formatDuration(bundle?.transcript?.segments) }}
@@ -450,6 +457,7 @@ import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import ExportModal from '@/components/ExportModal.vue'
 import TranscriptEditor from '@/components/TranscriptEditor.vue'
+import EpisodeTags from '@/components/EpisodeTags.vue'
 import * as api from '@/api'
 import { usePlayer } from '@/composables/player'
 import { useSubtitleScroll } from '@/composables/useSubtitleScroll'
@@ -948,6 +956,10 @@ onUnmounted(() => {
 .episode-meta {
   font-size: 12px;
   color: #6b7280;
+}
+
+.header-tags {
+  margin: 4px 0;
 }
 
 .header-actions {

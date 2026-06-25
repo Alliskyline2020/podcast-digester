@@ -105,6 +105,15 @@
         <div class="card-body">
           <h3 class="episode-title">{{ ep.title }}</h3>
 
+          <!-- 元信息标签：语种/时长/来源/分类 -->
+          <EpisodeTags
+            :language="ep.language"
+            :duration-min="ep.duration_min"
+            :source-type="ep.source_type"
+            :title="ep.title"
+            class="card-tags"
+          />
+
           <!-- 处理中状态 - 详细进度显示 -->
           <div v-if="isProcessing(ep.status)" class="processing-info">
             <!-- 总体进度条 -->
@@ -227,6 +236,7 @@ import * as api from '@/api'
 import { validatePodcastInput } from '@/utils/validation'
 import { useAdminAuth } from '@/composables/useAdminAuth'
 import TokenDialog from '@/components/TokenDialog.vue'
+import EpisodeTags from '@/components/EpisodeTags.vue'
 
 const { hasToken: hasAdminToken } = useAdminAuth()
 const showTokenDialog = ref(false)
@@ -816,6 +826,10 @@ onUnmounted(() => {
   font-weight: 600;
   color: #1f2937;
   margin-bottom: 8px;
+}
+
+.card-tags {
+  margin-bottom: 10px;
 }
 
 /* 处理中信息 */
