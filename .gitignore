@@ -109,3 +109,9 @@ backend/app/speech_analyzer_bridge/.swiftpm/
 # Plans / 临时输出（保留 docs/）
 *.tmp
 *.bak
+
+# Sensitive credentials (session cookies, API tokens, etc.)
+# 历史问题：cookies.txt 早期被误 commit，含 YouTube session cookies
+backend/cookies.txt
+*.cookies
+cookies.txt
