@@ -216,10 +216,14 @@ class AudioProcessPipeline:
 
         parse_result = await parser.parse(raw_input, episode_id, media_dir, download_progress)
 
+        # 翻译标题（英文→中文，方便检索和展示；纯中文标题直接复用）
+        title_zh = await self._translate_title(parse_result.title)
+
         # 更新 episode 信息
         await EpisodeRepository.update(
             episode_id,
             title=parse_result.title,
+            title_zh=title_zh,
             media_path=str(parse_result.audio_path),
             language=parse_result.language,
         )
@@ -489,6 +493,52 @@ class AudioProcessPipeline:
                 return False, f"coverage={coverage:.0%}"
 
         return True, ""
+
+    async def _translate_title(self, title: str) -> Optional[str]:
+        """翻译节目标题为中文。
+
+        - 纯中文标题（CJK 字符占比 > 30%）直接返回原文，省一次 LLM 调用
+        - 英文/混合标题用 DeepSeek 翻译，保留人名/品牌名原文
+        - 翻译失败返回 None，不阻塞 pipeline（下游显示原文）
+
+        Args:
+            title: 原始标题（可能是任何语言）
+
+        Returns:
+            中文标题字符串，或 None（翻译失败/空标题）
+        """
+        if not title or not title.strip():
+            return None
+
+        # 已经是中文为主的标题，直接复用
+        cjk_count = sum(1 for c in title if "\u4e00" <= c <= "\u9fff")
+        if cjk_count / max(len(title), 1) > 0.3:
+            logger.info(f"标题已是中文为主，跳过翻译: {title[:40]}")
+            return title
+
+        try:
+            from .llm import chat_json
+            result = await chat_json(
+                system=(
+                    "你是一位专业的播客标题翻译。把英文播客标题翻译成自然流畅的中文，"
+                    "保持原标题的语气、悬念和吸引点。人名/品牌名保留原文（可在括号内补中文译名）。"
+                    "只返回 JSON。"
+                ),
+                user=(
+                    f"翻译以下播客标题为中文。返回格式：{{\"title_zh\": \"翻译后的标题\"}}。\n\n"
+                    f"标题：{title}"
+                ),
+                max_tokens=200,
+                temperature=0.3,
+            )
+            translated = (result.get("title_zh") or "").strip()
+            if translated:
+                logger.info(f"标题翻译: {title[:40]} → {translated[:40]}")
+                return translated
+            return None
+        except Exception as e:
+            logger.warning(f"标题翻译失败 ({title[:40]}...): {e}")
+            return None
 
     async def _load_transcript(self, episode_id: str) -> Optional[Transcript]:
         """从文件加载 transcript"""

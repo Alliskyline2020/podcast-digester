@@ -167,7 +167,7 @@ class EpisodeRepository:
 
     # 允许更新的字段白名单（防止SQL注入）
     _ALLOWED_UPDATE_FIELDS = {
-        "title", "status", "language", "media_path", "is_fixture",
+        "title", "title_zh", "status", "language", "media_path", "is_fixture",
         "error_msg", "source_type", "last_activity_ts", "paragraph_mappings"
     }
 

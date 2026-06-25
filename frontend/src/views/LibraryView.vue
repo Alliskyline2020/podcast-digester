@@ -1,40 +1,21 @@
 <template>
   <div class="library-view">
-    <!-- 搜索和过滤栏 -->
-    <div class="search-section">
-      <div class="search-bar">
-        <input
-          v-model="searchQuery"
-          @input="handleSearch"
-          placeholder="搜索节目标题或摘要..."
-          class="search-input"
-        />
-        <div class="filter-chips" role="group" aria-label="按状态筛选节目">
-          <button
-            v-for="filter in filters"
-            :key="filter.value"
-            @click="setFilter(filter.value)"
-            :class="{ active: currentFilter === filter.value }"
-            :aria-current="currentFilter === filter.value ? 'true' : undefined"
-            class="filter-chip"
-          >
-            {{ filter.label }}
-          </button>
-        </div>
-        <!-- Admin token 设置入口；后端配置了 ADMIN_TOKEN 时，写操作需要这个 -->
-        <button
-          @click="showTokenDialog = true"
-          class="admin-token-btn"
-          :class="{ 'admin-token-btn-active': hasAdminToken }"
-          :aria-label="hasAdminToken ? '管理 admin token（已设置）' : '设置 admin token'"
-          :title="hasAdminToken ? 'Admin token 已设置（点击修改/登出）' : '设置 admin token'"
-        >
-          <span aria-hidden="true">{{ hasAdminToken ? '🔓' : '🔒' }}</span>
-        </button>
+    <!-- 品牌区：项目标题 + tagline + 统计 -->
+    <header class="brand-header">
+      <div class="brand-title-block">
+        <h1 class="brand-title">Podcast Digester</h1>
+        <span class="brand-tagline">本地播客摘要 · 5 分钟消化一期长播客</span>
       </div>
-    </div>
+      <div class="brand-stats" v-if="episodes.length > 0">
+        <span class="stat">{{ episodes.length }} 期</span>
+        <span class="stat-sep">·</span>
+        <span class="stat">{{ totalHours }} 小时</span>
+        <span class="stat-sep">·</span>
+        <span class="stat">{{ readyCount }} 期已消化</span>
+      </div>
+    </header>
 
-    <!-- 粘贴输入区 -->
+    <!-- 粘贴输入区：常驻顶部，浅灰背景降权 -->
     <div class="paste-section">
       <div class="input-group">
         <label for="paste-input" class="sr-only">播客链接或本地文件路径</label>
@@ -53,6 +34,33 @@
         </button>
       </div>
       <div v-if="error" id="paste-error" class="error-message" role="alert" aria-live="polite">{{ error }}</div>
+    </div>
+
+    <!-- 检索区：搜索框（按钮触发）+ 筛选 chips -->
+    <div class="search-section">
+      <div class="search-bar">
+        <input
+          v-model="searchQuery"
+          @keyup.enter="handleSearch"
+          placeholder="搜索节目标题或摘要..."
+          class="search-input"
+        />
+        <button @click="handleSearch" class="search-btn" :disabled="!searchQuery.trim()">
+          搜索
+        </button>
+        <div class="filter-chips" role="group" aria-label="按状态筛选节目">
+          <button
+            v-for="filter in filters"
+            :key="filter.value"
+            @click="setFilter(filter.value)"
+            :class="{ active: currentFilter === filter.value }"
+            :aria-current="currentFilter === filter.value ? 'true' : undefined"
+            class="filter-chip"
+          >
+            {{ filter.label }}
+          </button>
+        </div>
+      </div>
     </div>
 
     <!-- 节目状态转换通知（处理中 → 完成/失败）。
@@ -93,17 +101,23 @@
       </div>
     </div>
 
-    <!-- 节目列表 -->
+    <!-- 节目列表（响应式网格）-->
     <div class="episodes-list">
-      <div v-for="ep in filteredEpisodes" :key="ep.id" class="episode-card" @click="openEpisode(ep.id)">
-        <div class="card-header">
-          <span class="status-badge" :class="`status-${ep.status}`">
-            {{ statusText(ep.status) }}
-          </span>
-          <span class="episode-time">{{ formatTime(ep.created_at) }}</span>
-        </div>
+      <article
+        v-for="ep in filteredEpisodes"
+        :key="ep.id"
+        class="episode-card"
+        :class="`card-status-${getStatusKey(ep.status)}`"
+        @click="openEpisode(ep.id)"
+      >
         <div class="card-body">
-          <h3 class="episode-title">{{ ep.title }}</h3>
+          <!-- 标题区：中文标题为主，英文原标题为副 -->
+          <div class="title-block">
+            <h3 class="title-zh">{{ ep.title_zh || ep.title }}</h3>
+            <p v-if="ep.title_zh && ep.title_zh !== ep.title" class="title-original" :title="ep.title">
+              {{ ep.title }}
+            </p>
+          </div>
 
           <!-- 元信息标签：语种/时长/来源/分类 -->
           <EpisodeTags
@@ -116,15 +130,12 @@
 
           <!-- 处理中状态 - 详细进度显示 -->
           <div v-if="isProcessing(ep.status)" class="processing-info">
-            <!-- 总体进度条 -->
             <div class="progress-container">
               <div class="progress-bar">
                 <div class="progress-fill" :style="{ width: `${ep.overall_progress * 100}%` }"></div>
               </div>
               <span class="progress-percent">{{ Math.round(ep.overall_progress * 100) }}%</span>
             </div>
-
-            <!-- 当前阶段：文字 + 阶段内百分比（替代原圆点流程） -->
             <div class="stage-current">
               <span class="stage-current-label">
                 {{ currentStageName(ep) ? `正在${currentStageName(ep)}` : statusText(ep.status) }}
@@ -135,39 +146,44 @@
           </div>
 
           <!-- 完成状态 -->
-          <template v-else-if="ep.status === 'ready'">
-            <p v-if="ep.tldr_zh" class="tldr">{{ ep.tldr_zh }}</p>
-            <div v-if="ep.highlights_count > 0" class="highlights-preview">
-              <span class="highlights-count">💡 {{ ep.highlights_count }} 条亮点</span>
-              <span v-if="ep.worth_listening_verdict" class="verdict-badge" :class="ep.worth_listening_verdict">
-                {{ verdictText(ep.worth_listening_verdict) }}
-              </span>
-            </div>
-          </template>
+          <p v-else-if="ep.status === 'ready' && ep.tldr_zh" class="tldr">{{ ep.tldr_zh }}</p>
 
           <!-- 失败状态 -->
           <div v-else-if="ep.status === 'failed'" class="error-info">
             <span>⚠️ {{ getErrorMessage(ep) }}</span>
           </div>
+
+          <!-- 底部元信息行 -->
+          <div class="card-meta">
+            <span class="meta-time">{{ formatTime(ep.created_at) }}</span>
+            <template v-if="ep.status === 'ready' && ep.highlights_count > 0">
+              <span class="meta-dot">·</span>
+              <span class="meta-highlights">💡 {{ ep.highlights_count }} 条亮点</span>
+            </template>
+            <template v-if="ep.status === 'ready' && ep.worth_listening_verdict">
+              <span class="meta-dot">·</span>
+              <span class="meta-verdict" :class="`verdict-${ep.worth_listening_verdict}`">
+                {{ verdictText(ep.worth_listening_verdict) }}
+              </span>
+            </template>
+          </div>
         </div>
-        <div v-if="!ep.is_fixture" class="card-footer">
-          <!-- 处理中状态显示取消按钮 -->
-          <button v-if="isProcessing(ep.status)" @click.stop="confirmCancel(ep)" class="cancel-btn">取消</button>
-          <!-- 失败状态显示恢复和删除按钮 -->
+
+        <!-- 操作按钮（右下角悬浮）-->
+        <div v-if="!ep.is_fixture" class="card-actions">
+          <button v-if="isProcessing(ep.status)" @click.stop="confirmCancel(ep)" class="card-action-btn" title="取消处理">取消</button>
           <template v-else-if="ep.status === 'failed'">
             <button
               @click.stop="resumeEpisode(ep)"
               :disabled="resumingId === ep.id"
-              class="resume-btn"
-            >
-              {{ resumingId === ep.id ? '恢复中...' : '恢复' }}
-            </button>
-            <button @click.stop="confirmDelete(ep)" class="delete-btn">删除</button>
+              class="card-action-btn"
+              title="恢复处理"
+            >{{ resumingId === ep.id ? '恢复中' : '恢复' }}</button>
+            <button @click.stop="confirmDelete(ep)" class="card-action-btn card-action-danger" title="删除">删除</button>
           </template>
-          <!-- 完成状态显示删除按钮 -->
-          <button v-else-if="ep.status === 'ready'" @click.stop="confirmDelete(ep)" class="delete-btn">删除</button>
+          <button v-else-if="ep.status === 'ready'" @click.stop="confirmDelete(ep)" class="card-action-btn card-action-danger" title="删除">删除</button>
         </div>
-      </div>
+      </article>
 
       <!-- 加载中状态：初次加载时避免误显示"暂无节目" -->
       <div v-if="isLoading" class="empty-state" role="status" aria-live="polite">
@@ -221,11 +237,6 @@
     </div>
 
     </div>
-    <!-- Admin token 设置对话框 -->
-    <TokenDialog
-      :show="showTokenDialog"
-      @cancel="showTokenDialog = false"
-    />
   </div>
 </template>
 
@@ -234,12 +245,7 @@ import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import * as api from '@/api'
 import { validatePodcastInput } from '@/utils/validation'
-import { useAdminAuth } from '@/composables/useAdminAuth'
-import TokenDialog from '@/components/TokenDialog.vue'
 import EpisodeTags from '@/components/EpisodeTags.vue'
-
-const { hasToken: hasAdminToken } = useAdminAuth()
-const showTokenDialog = ref(false)
 
 const router = useRouter()
 
@@ -291,6 +297,22 @@ const filteredEpisodes = computed(() => {
 
   return filtered
 })
+
+// 品牌区统计
+const totalHours = computed(() => {
+  const total = episodes.value.reduce((sum, ep) => sum + (ep.duration_min || 0), 0)
+  return Math.round(total / 60)
+})
+
+const readyCount = computed(() =>
+  episodes.value.filter(ep => ep.status === 'ready').length
+)
+
+// 把后端 status 映射成卡片左侧 strip 的 key（ready/processing/failed/pending）
+const getStatusKey = (status) => {
+  if (['pending', 'downloading', 'asr_running', 'llm_running'].includes(status)) return 'processing'
+  return status || 'pending'
+}
 
 // 删除确认对话框状态
 const showDeleteDialog = ref(false)
@@ -563,28 +585,82 @@ onUnmounted(() => {
 
 <style scoped>
 .library-view {
-  max-width: 1200px;
+  max-width: 1280px;
   margin: 0 auto;
-  padding: 20px;
+  padding: 24px 20px 48px;
 }
 
-/* 搜索栏样式 */
+/* === 品牌区 === */
+.brand-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.brand-title-block {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.brand-title {
+  font-size: 24px;
+  font-weight: 700;
+  color: #1f2937;
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+.brand-tagline {
+  font-size: 13px;
+  color: #6b7280;
+}
+
+.brand-stats {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #6b7280;
+}
+
+.stat { font-weight: 500; }
+.stat-sep { color: #d1d5db; }
+
+/* === 粘贴区（视觉降权，浅灰背景）=== */
+.paste-section {
+  background: #fafafa;
+  border: 1px solid #f0f0f0;
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 16px;
+}
+
+/* === 检索区 === */
 .search-section {
   margin-bottom: 20px;
 }
 
 .search-bar {
   display: flex;
-  flex-direction: column;
-  gap: 12px;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .search-input {
-  width: 100%;
-  padding: 12px 16px;
+  flex: 1;
+  min-width: 200px;
+  padding: 8px 12px;
   border: 1px solid #e5e7eb;
-  border-radius: 8px;
-  font-size: 14px;
+  border-radius: 6px;
+  font-size: 13px;
+  background: white;
 }
 
 .search-input:focus {
@@ -593,32 +669,55 @@ onUnmounted(() => {
   box-shadow: 0 0 0 3px rgba(79, 142, 247, 0.1);
 }
 
+.search-btn {
+  padding: 8px 16px;
+  background: #1f2937;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.search-btn:hover:not(:disabled) {
+  background: #374151;
+}
+
+.search-btn:disabled {
+  background: #d1d5db;
+  cursor: not-allowed;
+}
+
 .filter-chips {
   display: flex;
-  gap: 8px;
+  gap: 4px;
   flex-wrap: wrap;
+  margin-left: auto;
 }
 
 .filter-chip {
   padding: 6px 12px;
-  background: #f3f4f6;
+  background: transparent;
   color: #6b7280;
-  border: 1px solid transparent;
+  border: 1px solid #e5e7eb;
   border-radius: 16px;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all 0.15s;
 }
 
 .filter-chip:hover {
-  background: #e5e7eb;
+  background: #f3f4f6;
+  border-color: #d1d5db;
 }
 
 .filter-chip.active {
-  background: #4f8ef7;
+  background: #1f2937;
   color: white;
-  border-color: #4f8ef7;
+  border-color: #1f2937;
 }
 
 .try-demo-btn {
@@ -775,61 +874,137 @@ onUnmounted(() => {
 }
 
 .episodes-list {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
   gap: 12px;
+  align-items: start;
 }
 
+/* B 方案卡片：左侧彩色 strip + 浅灰底，按状态变色 */
 .episode-card {
-  background: #ffffff;
-  border: 1px solid #e5e7eb;
-  border-radius: 10px;
-  padding: 16px 20px;
+  position: relative;
+  background: #fafafa;
+  border: 1px solid #ececec;
+  border-left: 3px solid #d1d5db;
+  border-radius: 8px;
+  padding: 14px 16px;
   cursor: pointer;
-  transition: box-shadow 0.2s;
+  transition: background 0.15s, border-color 0.15s, transform 0.15s;
+  overflow: hidden;
 }
 
 .episode-card:hover {
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  background: #f4f4f5;
+  transform: translateY(-1px);
 }
 
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 10px;
-}
-
-.status-badge {
-  padding: 4px 10px;
-  border-radius: 12px;
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.status-ready { background: #dcfce7; color: #166534; }
-.status-failed { background: #fee2e2; color: #991b1b; }
-.status-pending, .status-downloading, .status-asr_running,
-.status-llm_running { background: #dbeafe; color: #075985; }
-
-.episode-time {
-  font-size: 12px;
-  color: #6b7280;
-}
+/* 状态对应的左侧 strip 配色 */
+.card-status-ready { border-left-color: #10b981; }
+.card-status-processing { border-left-color: #f59e0b; }
+.card-status-failed { border-left-color: #ef4444; }
+.card-status-pending { border-left-color: #d1d5db; }
 
 .card-body {
-  margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
-.episode-title {
-  font-size: 16px;
+/* 标题区：中文主标题 + 英文原标题副 */
+.title-block {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.title-zh {
+  font-size: 15px;
   font-weight: 600;
   color: #1f2937;
-  margin-bottom: 8px;
+  line-height: 1.4;
+  margin: 0;
+  /* 放宽到 3 行（原来 nowrap 单行截断）*/
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+.title-original {
+  font-size: 12px;
+  color: #9ca3af;
+  line-height: 1.4;
+  margin: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+  font-style: italic;
 }
 
 .card-tags {
-  margin-bottom: 10px;
+  margin: 0;
+}
+
+/* 底部元信息行 */
+.card-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 11px;
+  color: #9ca3af;
+  margin-top: auto;
+  padding-top: 4px;
+}
+
+.meta-time { color: #9ca3af; }
+.meta-dot { color: #d1d5db; }
+.meta-highlights { color: #6b7280; }
+.meta-verdict { font-weight: 600; }
+
+/* 裁定标签配色 */
+.verdict-deep_listen { color: #047857; }
+.verdict-skim_outline { color: #b45309; }
+.verdict-skip { color: #6b7280; }
+
+/* 操作按钮：右下角，hover 才显示 */
+.card-actions {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.episode-card:hover .card-actions {
+  opacity: 1;
+}
+
+.card-action-btn {
+  padding: 4px 10px;
+  background: rgba(255, 255, 255, 0.9);
+  color: #4b5563;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+  backdrop-filter: blur(4px);
+  transition: all 0.15s;
+}
+
+.card-action-btn:hover {
+  background: white;
+  border-color: #d1d5db;
+}
+
+.card-action-danger:hover {
+  color: #ef4444;
+  border-color: #fecaca;
 }
 
 /* 处理中信息 */
@@ -1144,37 +1319,5 @@ onUnmounted(() => {
   to {
     transform: rotate(360deg);
   }
-}
-
-.admin-token-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  margin-left: 8px;
-  background: transparent;
-  border: 1px solid #e5e7eb;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 14px;
-  color: #6b7280;
-  transition: all 0.15s;
-}
-
-.admin-token-btn:hover {
-  background: #f3f4f6;
-  border-color: #d1d5db;
-}
-
-.admin-token-btn-active {
-  background: #ecfdf5;
-  border-color: #10b981;
-  color: #047857;
-}
-
-.admin-token-btn-active:hover {
-  background: #d1fae5;
 }
 </style>

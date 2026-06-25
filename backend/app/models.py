@@ -138,7 +138,8 @@ class IngestJob(BaseModel):
 class Episode(BaseModel):
     """节目基础信息"""
     id: str = Field(..., description="ep_{timestamp_ms} 或 fixture id")
-    title: str = Field(..., description="节目标题")
+    title: str = Field(..., description="节目标题（原文）")
+    title_zh: Optional[str] = Field(None, description="中文标题（英文标题翻译后；纯中文标题则与 title 一致）")
     status: EpisodeStatus = Field(..., description="处理状态")
     language: Optional[str] = Field(None, description="zh/en/unknown")
     media_path: Optional[str] = Field(None, description="/media/{id}/audio.*")
@@ -374,6 +375,7 @@ class EpisodeCard(BaseModel):
     # 元信息标签（语种/时长/来源/分类）——用于卡片和播放器头部展示
     source_type: Optional[str] = Field(None, description="来源平台标签：YouTube/B站/小宇宙/抖音/本地")
     source_url: Optional[str] = Field(None, description="原始 URL（前端用于推断分类等）")
+    title_zh: Optional[str] = Field(None, description="中文标题（英文标题翻译后；纯中文标题则与 title 一致）")
 
 
 class PasteRequest(BaseModel):
