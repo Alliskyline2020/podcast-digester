@@ -693,7 +693,13 @@ const paragraphs = computed(() => {
   // Prioritize backend paragraph_mappings if available
   if (bundle.value?.episode?.paragraph_mappings && bundle.value.episode.paragraph_mappings.length > 0) {
     console.log('[PlayerView] Using backend paragraph_mappings')
-    return bundle.value.episode.paragraph_mappings
+    // 后端 paragraph_mappings 部分生成路径没带 id 字段,
+    // DynamicScroller key-field="id" 会报 "Key is undefined" 挂掉。
+    // 这里兜底给每个段落补 id(用 index,稳定且唯一)。
+    return bundle.value.episode.paragraph_mappings.map((p, i) => ({
+      ...p,
+      id: p.id ?? i,
+    }))
   }
 
   // Fallback to frontend paragraph generation
