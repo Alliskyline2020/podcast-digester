@@ -247,8 +247,11 @@ class AudioProcessPipeline:
         else:
             logger.info(f"Using transcript ({len(transcript.segments)} segments, lang={transcript.language}) for {episode_id}")
             transcript.episode_id = episode_id
-            if transcript.language:
-                await EpisodeRepository.update(episode_id, language=transcript.language)
+
+        # 统一把语种写回 DB（ASR 分支原本缺这步，导致 episode.language 字段为空，
+        # 前端语种标签无法展示）。两个分支都执行，幂等。
+        if transcript.language:
+            await EpisodeRepository.update(episode_id, language=transcript.language)
 
         # 生成字幕段落映射
         await self._generate_paragraph_mappings(episode_id, transcript)
