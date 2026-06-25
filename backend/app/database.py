@@ -385,7 +385,29 @@ class EpisodeRepository:
                 (transcript_json, datetime.now().isoformat(), episode_id)
             )
             await db.commit()
-            return cursor.rowcount > 0
+            success = cursor.rowcount > 0
+
+        # 同步写文件 transcript.json(与 DB 保持一致)。
+        # 前端列表 API 的 load_highlight_fast 已改成 DB 优先,但 transcript.json
+        # 仍被 get_duration_fast / worker 重算 / pipeline fallback 等多处读取,
+        # 只改 DB 不改文件会导致数据源不一致。在数据访问层统一处理,所有调用方
+        # (apply_glossary / update_transcript_segment / 未来其他入口)自动同步。
+        if success:
+            try:
+                import asyncio
+                from pathlib import Path
+                transcript_file = Path(DB_PATH).parent / "media" / episode_id / "transcript.json"
+                transcript_file.parent.mkdir(parents=True, exist_ok=True)
+                await asyncio.to_thread(
+                    lambda: transcript_file.write_text(
+                        json.dumps(transcript.model_dump(), ensure_ascii=False, indent=2),
+                        encoding="utf-8"
+                    )
+                )
+            except Exception as e:
+                logger.warning(f"Failed to sync transcript.json for {episode_id}: {e}")
+
+        return success
 
     @staticmethod
     async def delete(episode_id: str) -> bool:
