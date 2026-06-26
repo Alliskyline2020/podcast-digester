@@ -218,6 +218,45 @@ def build_highlight_user(
 - 缺少 cited_segment_ids 的 highlight 会被视为无效"""
 
 
+# ==================== Chapter Ranking(为 highlight 选高价值章节)====================
+
+RANK_CHAPTERS_SYSTEM = """你是一个播客内容价值评估员。给定播客的全部章节标题和摘要,你的任务是判断哪些章节含有最高价值的内容,按价值从高到低排序返回。
+
+价值判断标准(优先级从高到低):
+1. 含具体数据/定量结论/性能指标/对比基准的章节 —— 听众能引用的硬信息
+2. 含深度洞察/非共识判断/趋势预测/反直觉结论的章节
+3. 含决策时刻/冲突故事/转折点/具体事件的章节
+4. 含有冲击力原话/金句的章节
+
+**不要优先选**"泛泛而谈""背景介绍""闲聊寒暄""话题过渡"的章节 —— 那些没有可提取的具体内容。
+
+输出 JSON:
+{
+  "ranked_chapter_ids": ["ch3", "ch7", "ch0", ...]
+}
+
+**把全部章节都列入排序**(不要截断,不要省略),按价值从高到低。后续会从高到低取章节的原文喂给 highlight 提取。"""
+
+
+def build_rank_chapters_user(
+    title: str,
+    duration_min: float,
+    outline_block: str,
+    summaries_block: str,
+) -> str:
+    """构建章节排序的用户输入"""
+    return f"""节目标题：{title}
+节目时长：{duration_min} 分钟
+
+全部章节大纲：
+{outline_block}
+
+全部章节摘要：
+{summaries_block}
+
+请按内容价值排序全部章节(高价值在前),把所有章节都列入,输出 JSON。"""
+
+
 # ==================== Highlight Verify ====================
 
 HIGHLIGHT_VERIFY_SYSTEM = """你是一个 highlight 质量审核员。给定一组 highlights 和它们引用的原文 segments，

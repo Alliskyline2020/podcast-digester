@@ -55,17 +55,13 @@ async def extract_highlights(
     summaries_block = _build_summaries_block(summaries)
 
     # 选择内容最密集的章节获取原始字幕。
-    # 按时长动态覆盖:长播客章节数多(94 章只看 8 章 = 8.5% 覆盖,会漏大量
-    # 数据点和洞察),需要覆盖更多章节。短播客章少,精选即可。
+    # 不再用机械的"segment 密度"排序,改成 LLM 基于内容价值排序全部章节
+    # (数据点/洞察/故事价值),然后按排序填充 raw_block,高价值章节完整保留。
     from ..config import LLM_HIGHLIGHT_MAX_SEGMENTS
-    if duration_min < 60:
-        max_ch = 8
-    elif duration_min < 120:
-        max_ch = 16
-    else:
-        max_ch = 24
-    dense_chapter_ids = _get_densest_chapters(chapters, transcript, max_chapters=max_ch)
-    raw_block = _build_raw_transcript(transcript, dense_chapter_ids, chapters, max_segments=LLM_HIGHLIGHT_MAX_SEGMENTS)
+    ranked_chapter_ids = await _rank_chapters_by_value(title, duration_min, chapters, summaries)
+    raw_block = _build_raw_transcript_ranked(
+        transcript, ranked_chapter_ids, chapters, max_segments=LLM_HIGHLIGHT_MAX_SEGMENTS
+    )
 
     user_input = build_highlight_user(
         title, duration_min, outline_block, summaries_block, raw_block
@@ -235,6 +231,112 @@ def _get_densest_chapters(
     # 按段数排序，取最密集的
     chapter_density.sort(key=lambda x: x[0], reverse=True)
     return [f"ch{i}" for _, i, _ in chapter_density[:max_chapters]]
+
+
+async def _rank_chapters_by_value(
+    title: str,
+    duration_min: float,
+    chapters: List[Dict[str, Any]],
+    summaries: List[Dict[str, Any]],
+) -> List[str]:
+    """LLM 基于内容价值排序全部章节。
+
+    替代机械的 _get_densest_chapters(segment 密度排序)。LLM 看全部章节
+    摘要,判断哪些含数据点/深度洞察/反共识/决策故事,按价值排序返回。
+
+    失败时 fallback 到密度排序(全部章节),保证不丢内容。
+    """
+    from ..llm import chat_json
+    from ..prompts import RANK_CHAPTERS_SYSTEM, build_rank_chapters_user
+
+    outline_block = _build_outline_block(chapters)
+    summaries_block = _build_summaries_block(summaries)
+
+    try:
+        result = await chat_json(
+            system=RANK_CHAPTERS_SYSTEM,
+            user=build_rank_chapters_user(title, duration_min, outline_block, summaries_block),
+            temperature=0.2,
+            max_tokens=4000,  # 章节多时排序列表长
+        )
+        ranked = result.get("ranked_chapter_ids", [])
+        if ranked and len(ranked) > 0:
+            logger.info(f"[rank_chapters] LLM 排序 {len(ranked)} 章, top5: {ranked[:5]}")
+            return ranked
+        logger.warning("[rank_chapters] LLM 返回空, fallback to density")
+    except Exception as e:
+        logger.warning(f"[rank_chapters] LLM 排序失败, fallback to density: {e}")
+
+    # Fallback: 密度排序,返回全部章节(不截断)
+    return _get_densest_chapters(chapters, None, max_chapters=len(chapters))
+
+
+def _build_raw_transcript_ranked(
+    transcript: "Transcript",
+    ranked_chapter_ids: List[str],
+    chapters: List[Dict[str, Any]],
+    max_segments: int = None,
+) -> str:
+    """按 LLM 排序的章节顺序填充 raw_block。
+
+    高价值章节的 segment 优先完整保留,直到达到 max_segments 上限。
+    低价值章节可能被截断或排除(如果 max_segments 不够)。这保证有限
+    预算下,最重要的内容一定能被 LLM 看到。
+
+    与 _build_raw_transcript 的区别:那个按章节自然顺序,这个按价值排序。
+    """
+    from ..config import LLM_HIGHLIGHT_MAX_SEGMENTS
+    if max_segments is None:
+        max_segments = LLM_HIGHLIGHT_MAX_SEGMENTS
+
+    # 解析排序后的章节索引(按价值从高到低)
+    ordered_indices: List[int] = []
+    for cid in ranked_chapter_ids or []:
+        if isinstance(cid, str) and cid.startswith("ch"):
+            try:
+                idx = int(cid[2:])
+                if 0 <= idx < len(chapters):
+                    ordered_indices.append(idx)
+            except ValueError:
+                pass
+
+    # 兜底:LLM 排序解析失败,用自然顺序
+    if not ordered_indices:
+        ordered_indices = list(range(len(chapters)))
+
+    seg_by_id = {s.id: s for s in transcript.segments}
+    lines: List[str] = []
+    count = 0
+    covered_chapters = 0
+
+    # 按价值顺序遍历章节,逐章填充直到 max_segments
+    for idx in ordered_indices:
+        ch = chapters[idx]
+        start = ch.get("start_segment_id")
+        end = ch.get("end_segment_id")
+        if not (isinstance(start, int) and isinstance(end, int)):
+            continue
+        chapter_seg_count = 0
+        for seg_id in range(start, end + 1):
+            if count >= max_segments:
+                break
+            seg = seg_by_id.get(seg_id)
+            if seg is None:
+                continue
+            text = seg.text_translated or seg.text_original
+            lines.append(f"{seg.id} | {text}")
+            count += 1
+            chapter_seg_count += 1
+        if chapter_seg_count > 0:
+            covered_chapters += 1
+        if count >= max_segments:
+            break
+
+    logger.info(
+        f"[raw_block] {count} segments from {covered_chapters}/{len(ordered_indices)} ranked chapters "
+        f"(max_segments={max_segments})"
+    )
+    return "\n".join(lines)
 
 
 def _build_outline_block(chapters: List[Dict[str, Any]]) -> str:
