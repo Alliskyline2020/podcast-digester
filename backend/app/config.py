@@ -37,7 +37,11 @@ class Settings:
             "DEEPSEEK_BASE_URL",
             "https://api.deepseek.com/v1"
         )
-        self.deepseek_model = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+        # DeepSeek V4 (2026-04 发布):deepseek-chat 旧名 2026-07-24 停用。
+        # flash(284B/13B active)效率优化,成本约为 pro 的 1/10,质量足够
+        # 用于金句/翻译/章节/摘要/洞察等结构化提取任务。如需更高推理质量
+        # (如复杂判定),可在 .env 设 DEEPSEEK_MODEL=deepseek-v4-pro。
+        self.deepseek_model = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
 
         # ==================== Whisper ASR 配置 ====================
         self.whisper_model = os.getenv("PODCAST_DIGESTER_WHISPER_MODEL", "small")
