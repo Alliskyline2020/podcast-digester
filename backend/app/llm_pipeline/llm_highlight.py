@@ -54,9 +54,17 @@ async def extract_highlights(
     outline_block = _build_outline_block(chapters)
     summaries_block = _build_summaries_block(summaries)
 
-    # 选择内容最密集的章节获取原始字幕
+    # 选择内容最密集的章节获取原始字幕。
+    # 按时长动态覆盖:长播客章节数多(94 章只看 8 章 = 8.5% 覆盖,会漏大量
+    # 数据点和洞察),需要覆盖更多章节。短播客章少,精选即可。
     from ..config import LLM_HIGHLIGHT_MAX_SEGMENTS
-    dense_chapter_ids = _get_densest_chapters(chapters, transcript, max_chapters=8)
+    if duration_min < 60:
+        max_ch = 8
+    elif duration_min < 120:
+        max_ch = 16
+    else:
+        max_ch = 24
+    dense_chapter_ids = _get_densest_chapters(chapters, transcript, max_chapters=max_ch)
     raw_block = _build_raw_transcript(transcript, dense_chapter_ids, chapters, max_segments=LLM_HIGHLIGHT_MAX_SEGMENTS)
 
     user_input = build_highlight_user(
