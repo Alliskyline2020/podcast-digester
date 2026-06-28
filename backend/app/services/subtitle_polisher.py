@@ -112,6 +112,10 @@ async def polish_subtitles(
                 system=POLISH_SYSTEM,
                 user=build_polish_user(inputs),
                 temperature=0.2,
+                # 用 deepseek-chat(V4 Flash non-thinking 模式)。
+                # 字幕优化是简单任务,不需要 reasoning/thinking,non-thinking 更快更省
+                # (thinking 模式会消耗 reasoning_tokens 占用 max_tokens 预算)。
+                model="deepseek-chat",
                 max_tokens=8000,
                 response_format={"type": "json_object"},
             )
