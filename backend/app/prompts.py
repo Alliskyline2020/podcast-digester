@@ -2,6 +2,7 @@
 Prompt 模板
 所有 LLM 任务的系统提示词和用户模板
 """
+from typing import Optional
 
 PROMPT_VERSION = 2
 
@@ -173,25 +174,41 @@ def build_highlight_user(
     outline_block: str,
     summaries_block: str,
     raw_block: str,
+    batch_info: Optional[str] = None,
 ) -> str:
     """构建 Highlight 用户输入。
 
     数量按时长动态调整:长播客信息量大,金句应更多;短播客精选即可。
     类型强制多样性:5 种 kind 至少各 1 条(内容支持时),避免 LLM 偏重某一种。
+
+    batch_info: 分批处理时(长播客 raw_block 超 LLM context),传 "第 X/N 批"
+    提示 LLM 只处理本批内容。None 表示单批全量。
     """
-    # 按时长动态计算目标金句数量范围
+    # 分批模式下,每批的目标数量 = 总目标 / 批数(batch_info 解析 N)
+    batch_n = 1
+    if batch_info:
+        import re
+        m = re.search(r"第\s*\d+\s*/\s*(\d+)\s*批", batch_info)
+        if m:
+            batch_n = max(int(m.group(1)), 1)
+
+    # 按时长动态计算目标金句数量范围(分批时按批数缩放)
     if duration_min < 30:
-        target_range = "5-8 条"
-        focus_hint = "短播客,精选最有冲击力的金句和数据点"
+        base_lo, base_hi, focus_hint = 5, 8, "短播客,精选最有冲击力的金句和数据点"
     elif duration_min < 60:
-        target_range = "8-12 条"
-        focus_hint = "中等时长,覆盖主要观点 + 关键数据点"
+        base_lo, base_hi, focus_hint = 8, 12, "中等时长,覆盖主要观点 + 关键数据点"
     elif duration_min < 120:
-        target_range = "12-18 条"
-        focus_hint = "长播客,分章节深度抽提,数据点/独到观点/反共识/故事场景都要"
+        base_lo, base_hi, focus_hint = 12, 18, "长播客,分章节深度抽提,数据点/独到观点/反共识/故事场景都要"
     else:
-        target_range = "18-25 条"
-        focus_hint = "超长播客,每个主要章节至少 2-3 条,务必挖出埋藏的具体数据、定量结论、反共识观点和决策时刻"
+        base_lo, base_hi, focus_hint = 18, 25, "超长播客,每个主要章节至少 2-3 条,务必挖出埋藏的具体数据、定量结论、反共识观点和决策时刻"
+    target_lo = max(base_lo // batch_n, 2)
+    target_hi = max(base_hi // batch_n, target_lo + 1)
+    target_range = f"{target_lo}-{target_hi} 条"
+
+    batch_hint = (
+        f"\n**分批处理说明**:这是 {batch_info},只从本批提供的字幕里抽 highlight(其他批次会单独处理,不要担心遗漏本批外内容)。本批目标数量已按比例缩减。"
+        if batch_info else ""
+    )
 
     return f"""节目标题：{title}
 节目时长：{duration_min} 分钟
@@ -203,7 +220,7 @@ def build_highlight_user(
 {summaries_block}
 
 重点章节的原始字幕（请优先从这里挖 quote/fact/story）：
-{raw_block}
+{raw_block}{batch_hint}
 
 请输出 JSON。务必：
 - **本期目标 {target_range} highlights** —— {focus_hint}

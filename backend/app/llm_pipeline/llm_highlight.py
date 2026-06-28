@@ -54,97 +54,120 @@ async def extract_highlights(
     outline_block = _build_outline_block(chapters)
     summaries_block = _build_summaries_block(summaries)
 
-    # 选择内容最密集的章节获取原始字幕。
-    # 不再用机械的"segment 密度"排序,改成 LLM 基于内容价值排序全部章节
-    # (数据点/洞察/故事价值),然后按排序填充 raw_block,高价值章节完整保留。
-    from ..config import LLM_HIGHLIGHT_MAX_SEGMENTS
+    # LLM 基于内容价值排序全部章节,然后按章节边界分批(不裂语义)。
+    # 长播客会分多批,每批 ≤ max_segments_per_batch,保证不超 LLM context。
+    # 高价值章节在前 → 前面批次含金量高,即使总批数多也不会漏重点。
+    from ..config import (
+        LLM_HIGHLIGHT_MAX_SEGMENTS,
+        LLM_HIGHLIGHT_VERIFY_ENABLED,
+        LLM_HIGHLIGHT_TOP_K,
+    )
     ranked_chapter_ids = await _rank_chapters_by_value(title, duration_min, chapters, summaries)
-    raw_block = _build_raw_transcript_ranked(
-        transcript, ranked_chapter_ids, chapters, max_segments=LLM_HIGHLIGHT_MAX_SEGMENTS
+    batches = _split_chapters_into_batches(
+        transcript, ranked_chapter_ids, chapters,
+        max_segments_per_batch=LLM_HIGHLIGHT_MAX_SEGMENTS,
     )
-
-    user_input = build_highlight_user(
-        title, duration_min, outline_block, summaries_block, raw_block
+    logger.info(
+        f"[highlight] {len(batches)} 批 (chapter-aware, max {LLM_HIGHLIGHT_MAX_SEGMENTS} segs/batch), "
+        f"sizes: {[len(b) for b in batches]}"
     )
+    if progress_cb:
+        progress_cb(0.2)
 
-    try:
-        result = await chat_json(
-            system=HIGHLIGHT_SYSTEM,
-            user=user_input,
-            temperature=0.3,
-            response_format={"type": "json_object"},
-            # Highlight 输出包含多条 quote/insight/fact/contrarian/story，
-            # 每条都有 text_zh + why_zh + cited_segment_ids。长节目（3h+）容易
-            # 超过 4K 默认上限被截断 → JSON 解析失败。DeepSeek-chat 上限 8192。
-            max_tokens=8192,
+    # 每批跑 highlight 提取(分批不裂语义,合并后 verify 去重)
+    all_raw_highlights = []
+    first_batch_result = {}  # tldr/verdict/target_audience 等整集元数据从第一批拿
+    total = len(batches)
+    for i, batch_segs in enumerate(batches):
+        raw_block = "\n".join(f"{sid} | {text}" for sid, text in batch_segs)
+        batch_info = f"第 {i+1}/{total} 批" if total > 1 else None
+        user_input = build_highlight_user(
+            title, duration_min, outline_block, summaries_block, raw_block, batch_info
         )
-
-        # 解析 highlights，跳过无效项
-        valid_highlights = []
-        for h in result.get("highlights", []):
-            try:
-                # 检查是否有 cited_segment_ids（必填）
-                segment_ids = h.get("cited_segment_ids", [])
-                if not segment_ids:
-                    logger.warning(f"Skipped highlight without cited_segment_ids: {h.get('text_zh', '')[:50]}...")
-                    continue
-
-                # 从 cited_segment_ids 计算 start_ms
-                start_ms = None
-                # 找到第一个引用的段落的时间
-                first_seg = next((s for s in transcript.segments if s.id == segment_ids[0]), None)
-                if first_seg:
-                    start_ms = first_seg.start_ms
-                else:
-                    logger.warning(f"Skipped highlight with invalid segment_ids {segment_ids}: {h.get('text_zh', '')[:50]}...")
-                    continue
-
-                item = HighlightItem(
-                    kind=HighlightKind(h.get("kind", "insight")),
-                    text_zh=h.get("text_zh", ""),
-                    why_zh=h.get("why_zh", ""),
-                    cited_segment_ids=segment_ids,
-                    start_ms=start_ms,
-                )
-                # 只添加有实质内容的亮点
-                if item.text_zh.strip():
-                    valid_highlights.append(item)
-                else:
-                    logger.warning(f"Skipped highlight with empty text_zh: {h}")
-            except Exception as e:
-                logger.warning(f"Skipped invalid highlight item: {h}, error: {e}")
-
-        # verify pass：二次 LLM 审核 keep/drop，失败优雅降级（keep all）
-        from ..config import LLM_HIGHLIGHT_VERIFY_ENABLED, LLM_HIGHLIGHT_TOP_K
-        if LLM_HIGHLIGHT_VERIFY_ENABLED and valid_highlights:
-            if progress_cb:
-                progress_cb(0.85)
-            valid_highlights = await _verify_highlights(valid_highlights, transcript)
-
-        # top-k 截断（保留 LLM 原始顺序，prompt 已要求质量优先排序）
-        pre_topk = len(valid_highlights)
-        valid_highlights = _topk_highlights(valid_highlights, LLM_HIGHLIGHT_TOP_K)
-
-        highlight = HighlightCard(
-            tldr_zh=result.get("tldr_zh", ""),
-            worth_listening_verdict=VerdictType(result.get("worth_listening_verdict", "skim_outline")),
-            verdict_confidence=ConfidenceType(result.get("verdict_confidence", "medium")),
-            target_audience_zh=result.get("target_audience_zh", ""),
-            highlights=valid_highlights,
-            estimated_time_saved_min=result.get("estimated_time_saved_min"),
-        )
-
-        logger.info(f"Extracted {len(highlight.highlights)} highlights "
-                    f"(verify+topk applied, pre-topk={pre_topk})")
-
+        try:
+            result = await chat_json(
+                system=HIGHLIGHT_SYSTEM,
+                user=user_input,
+                temperature=0.3,
+                response_format={"type": "json_object"},
+                max_tokens=16384,
+            )
+            if i == 0:
+                first_batch_result = result
+            batch_hs = result.get("highlights", [])
+            all_raw_highlights.extend(batch_hs)
+            logger.info(
+                f"[highlight] 批 {i+1}/{total}: +{len(batch_hs)} (累计 {len(all_raw_highlights)})"
+            )
+        except Exception as batch_e:
+            logger.warning(f"[highlight] 批 {i+1}/{total} 失败, 跳过: {batch_e}")
         if progress_cb:
-            progress_cb(0.8)
+            progress_cb(0.2 + 0.5 * (i + 1) / total)
 
-        return highlight
+    # 统一解析 highlights(跨批合并)
+    valid_highlights = []
+    for h in all_raw_highlights:
+        try:
+            segment_ids = h.get("cited_segment_ids", [])
+            if not segment_ids:
+                logger.warning(f"Skipped highlight without cited_segment_ids: {h.get('text_zh', '')[:50]}...")
+                continue
+            first_seg = next((s for s in transcript.segments if s.id == segment_ids[0]), None)
+            if first_seg:
+                start_ms = first_seg.start_ms
+            else:
+                logger.warning(f"Skipped highlight with invalid segment_ids {segment_ids}: {h.get('text_zh', '')[:50]}...")
+                continue
+            item = HighlightItem(
+                kind=HighlightKind(h.get("kind", "insight")),
+                text_zh=h.get("text_zh", ""),
+                why_zh=h.get("why_zh", ""),
+                cited_segment_ids=segment_ids,
+                start_ms=start_ms,
+            )
+            if item.text_zh.strip():
+                valid_highlights.append(item)
+            else:
+                logger.warning(f"Skipped highlight with empty text_zh: {h}")
+        except Exception as e:
+            logger.warning(f"Skipped invalid highlight item: {h}, error: {e}")
 
-    except Exception as e:
-        logger.error(f"Highlight extraction failed: {e}")
-        raise RuntimeError(f"Highlight extraction failed: {e}")
+    # verify pass:二次 LLM 审核 keep/drop(跨批合并后统一 verify,天然去重)
+    if LLM_HIGHLIGHT_VERIFY_ENABLED and valid_highlights:
+        if progress_cb:
+            progress_cb(0.85)
+        valid_highlights = await _verify_highlights(valid_highlights, transcript)
+
+    # top-k 截断(按时长动态,与 prompt 目标范围对齐)。
+    # 原 LLM_HIGHLIGHT_TOP_K=10 是硬编码,289 分钟超长播客也只留 10 条太少。
+    if duration_min < 30:
+        top_k = 8
+    elif duration_min < 60:
+        top_k = 12
+    elif duration_min < 120:
+        top_k = 18
+    else:
+        top_k = 25
+    pre_topk = len(valid_highlights)
+    valid_highlights = _topk_highlights(valid_highlights, top_k)
+
+    # HighlightCard:整集元数据从第一批(含高价值章节,代表性最强)
+    highlight = HighlightCard(
+        tldr_zh=first_batch_result.get("tldr_zh", ""),
+        worth_listening_verdict=VerdictType(first_batch_result.get("worth_listening_verdict", "skim_outline")),
+        verdict_confidence=ConfidenceType(first_batch_result.get("verdict_confidence", "medium")),
+        target_audience_zh=first_batch_result.get("target_audience_zh", ""),
+        highlights=valid_highlights,
+        estimated_time_saved_min=first_batch_result.get("estimated_time_saved_min"),
+    )
+
+    logger.info(f"Extracted {len(highlight.highlights)} highlights "
+                f"({len(batches)} batches, verify+topk applied, pre-topk={pre_topk})")
+
+    if progress_cb:
+        progress_cb(0.8)
+
+    return highlight
 
 
 async def _verify_highlights(
@@ -257,7 +280,7 @@ async def _rank_chapters_by_value(
             system=RANK_CHAPTERS_SYSTEM,
             user=build_rank_chapters_user(title, duration_min, outline_block, summaries_block),
             temperature=0.2,
-            max_tokens=4000,  # 章节多时排序列表长
+            max_tokens=8000,  # 94 章排序列表长,4000 不够
         )
         ranked = result.get("ranked_chapter_ids", [])
         if ranked and len(ranked) > 0:
@@ -337,6 +360,78 @@ def _build_raw_transcript_ranked(
         f"(max_segments={max_segments})"
     )
     return "\n".join(lines)
+
+
+def _split_chapters_into_batches(
+    transcript: "Transcript",
+    ranked_chapter_ids: List[str],
+    chapters: List[Dict[str, Any]],
+    max_segments_per_batch: int = 600,
+) -> List[List[tuple]]:
+    """按章节边界把 raw transcript 分成多批(不裂语义)。
+
+    保证:
+    - 每批 ≤ max_segments_per_batch(不超 LLM context)
+    - 不在章节中间切(每批是若干完整章节,语义不裂)
+    - 按 LLM 排序顺序分批(高价值章节在前 → 前面批次含金量高)
+
+    特殊情况:单个章节 > max_segments_per_batch 时,该章单独成批
+    (会超上限,但不在章节中间切,由调用方决定是否接受)。
+
+    Returns:
+        List[批次],每批 = [(seg_id, text), ...]
+    """
+    # 解析排序后的章节索引
+    ordered_indices: List[int] = []
+    for cid in ranked_chapter_ids or []:
+        if isinstance(cid, str) and cid.startswith("ch"):
+            try:
+                idx = int(cid[2:])
+                if 0 <= idx < len(chapters):
+                    ordered_indices.append(idx)
+            except ValueError:
+                pass
+    if not ordered_indices:
+        ordered_indices = list(range(len(chapters)))
+
+    seg_by_id = {s.id: s for s in transcript.segments}
+
+    def collect_chapter_segs(idx: int) -> List[tuple]:
+        ch = chapters[idx]
+        start, end = ch.get("start_segment_id"), ch.get("end_segment_id")
+        if not (isinstance(start, int) and isinstance(end, int)):
+            return []
+        out = []
+        for seg_id in range(start, end + 1):
+            seg = seg_by_id.get(seg_id)
+            if seg is not None:
+                text = seg.text_translated or seg.text_original
+                out.append((seg.id, text))
+        return out
+
+    batches: List[List[tuple]] = []
+    current: List[tuple] = []
+    current_count = 0
+
+    for idx in ordered_indices:
+        ch_segs = collect_chapter_segs(idx)
+        ch_size = len(ch_segs)
+        if ch_size == 0:
+            continue
+
+        # 加这章会超 max,且当前批不空 → 先切批
+        if current and current_count + ch_size > max_segments_per_batch:
+            batches.append(current)
+            current = []
+            current_count = 0
+
+        current.extend(ch_segs)
+        current_count += ch_size
+
+    if current:
+        batches.append(current)
+
+    return batches
 
 
 def _build_outline_block(chapters: List[Dict[str, Any]]) -> str:
