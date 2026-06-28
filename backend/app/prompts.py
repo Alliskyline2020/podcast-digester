@@ -201,8 +201,10 @@ def build_highlight_user(
         base_lo, base_hi, focus_hint = 12, 18, "长播客,分章节深度抽提,数据点/独到观点/反共识/故事场景都要"
     else:
         base_lo, base_hi, focus_hint = 18, 25, "超长播客,每个主要章节至少 2-3 条,务必挖出埋藏的具体数据、定量结论、反共识观点和决策时刻"
-    target_lo = max(base_lo // batch_n, 2)
-    target_hi = max(base_hi // batch_n, target_lo + 1)
+    # 每批至少 4 条(分批后总量 = 批数 × 每批数,避免分多批时每批只 2 条
+    # 导致 LLM 生成过少,最终 verify/topk 后数量不足)。
+    target_lo = max(base_lo // batch_n, 4)
+    target_hi = max(base_hi // batch_n, target_lo + 3)
     target_range = f"{target_lo}-{target_hi} 条"
 
     batch_hint = (
