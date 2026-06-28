@@ -37,11 +37,14 @@ class Settings:
             "DEEPSEEK_BASE_URL",
             "https://api.deepseek.com/v1"
         )
-        # DeepSeek V4 (2026-04 发布):deepseek-chat 旧名 2026-07-24 停用。
-        # flash(284B/13B active)效率优化,成本约为 pro 的 1/10,质量足够
-        # 用于金句/翻译/章节/摘要/洞察等结构化提取任务。如需更高推理质量
-        # (如复杂判定),可在 .env 设 DEEPSEEK_MODEL=deepseek-v4-pro。
-        self.deepseek_model = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
+        # DeepSeek V4 (2026-04):
+        # - deepseek-chat = V4 Flash non-thinking(快+省,用于翻译/分段/摘要/字幕优化等简单任务)
+        # - deepseek-v4-flash = V4 Flash thinking(推理,用于金句/洞察等复杂任务)
+        # - deepseek-v4-pro = 旗舰(最高质量)
+        # 默认 non-thinking:大部分任务不需要 reasoning,non-thinking 更快更省
+        # (thinking 的 reasoning_tokens 会占用 max_tokens 预算)。
+        # 需要推理的任务(金句提取/章节排序/洞察)在 chat_json 调用时显式传 model。
+        self.deepseek_model = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
 
         # ==================== Whisper ASR 配置 ====================
         self.whisper_model = os.getenv("PODCAST_DIGESTER_WHISPER_MODEL", "small")
