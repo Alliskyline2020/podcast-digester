@@ -22,13 +22,13 @@ from .config import (
 from .llm_pipeline import (
     split_into_chapters,
     generate_chapter_summaries,
-    translate_segments,
     extract_highlights,
 )
 from .llm_pipeline.llm_product_insights import run_product_insights_stage
 from .llm_pipeline.llm_launch_analyze import analyze_launch_specs
 from .llm_pipeline.llm_podcast_analyze import analyze_podcast_insights_parallel
 from .services.subtitle_segmenter import SubtitleSegmenter
+from .services.subtitle_processor import SubtitleProcessor
 
 
 logger = logging.getLogger(__name__)
@@ -260,9 +260,11 @@ class AudioProcessPipeline:
         # 生成字幕段落映射
         await self._generate_paragraph_mappings(episode_id, transcript)
 
-        # === 阶段 2.5: 添加标点符号（可选，仅中文ASR字幕）===
-        if transcript.language == "zh" and self._needs_punctuation(transcript):
-            await self._add_punctuation_to_transcript(episode_id, transcript, on_progress)
+        # === 阶段 2.5: 字幕润色（双语，加标点+去口水话，时间戳/语义/段数不变）===
+        await SubtitleProcessor().polish(
+            transcript,
+            progress_cb=(lambda p: on_progress("polish", p)) if on_progress else None,
+        )
 
         self._checkpoint_json(episode_id, "transcript.json", transcript.model_dump())
         await self._complete_stage(stages, "transcribe", completed_stages, sync_stages)
@@ -287,10 +289,9 @@ class AudioProcessPipeline:
         self._checkpoint_json(episode_id, "summaries.json", summaries)
         await self._complete_stage(stages, "summarize", completed_stages, sync_stages)
 
-        # === 阶段 5: 翻译（可选）===
-        # 流程：双语字幕（YouTube 中英都有）合并后 text_translated 已有中文 → 跳过 LLM 翻译；
-        # 只有英文单语（text_translated 多数为空）才 translate（英文→中文）。
-        # 最终用户看中文，下游 split/summary/highlight/insights 统一用 text_translated 优先。
+        # === 阶段 5: 翻译（可选，EN→ZH，结构校验+不丢段）===
+        # 双语字幕合并后 text_translated 已有中文 → 跳过；英文单语才翻译。
+        # 下游 split/summary/highlight/insights 统一用 text_translated 优先。
         _translated_ratio = (
             sum(1 for s in transcript.segments if s.text_translated) /
             max(len(transcript.segments), 1)
@@ -298,18 +299,10 @@ class AudioProcessPipeline:
         if transcript.language != "zh" and _translated_ratio < 0.5:
             logger.info(f"Translate needed (translated ratio {_translated_ratio:.0%})")
             await self._add_stage(stages, "translate", EpisodeStatus.LLM_RUNNING, sync_stages)
-
-            translations = await translate_segments(
+            await SubtitleProcessor().translate(
                 transcript,
                 progress_cb=lambda p: self._update_stage_progress_sync(stages, "translate", p, episode_id, sync_stages),
             )
-            # translate_segments 返回 [{"id": i, "text_zh": "..."}]，不会回填 transcript；
-            # 这里按 id 合并到 segment.text_translated，否则下游 checkpoint 拿不到翻译。
-            if translations:
-                by_id = {t.get("id"): (t.get("text_zh") or t.get("text_translated") or "") for t in translations}
-                for seg in transcript.segments:
-                    if seg.id in by_id:
-                        seg.text_translated = by_id[seg.id]
             self._checkpoint_json(episode_id, "transcript.json", transcript.model_dump())
             await self._complete_stage(stages, "translate", completed_stages, sync_stages)
 
@@ -599,93 +592,6 @@ class AudioProcessPipeline:
             "error": stage.get("error"),
         }
 
-    def _needs_punctuation(self, transcript) -> bool:
-        """
-        检查字幕是否需要添加标点符号
-
-        判断标准：
-        - 中文段落
-        - 大部分段落没有标点符号
-        """
-        if not transcript or not transcript.segments:
-            return False
-
-        # 检查前10个段落的标点情况
-        check_count = min(10, len(transcript.segments))
-        punct_count = 0
-
-        for seg in transcript.segments[:check_count]:
-            text = seg.text_original or ""
-            if any(c in text for c in "。！？，、；：,.!?"):
-                punct_count += 1
-
-        # 如果少于50%有标点，认为需要添加
-        return punct_count / check_count < 0.5
-
-    async def _add_punctuation_to_transcript(
-        self,
-        episode_id: str,
-        transcript,
-        on_progress: Optional[Callable] = None
-    ) -> None:
-        """
-        为字幕添加标点符号
-
-        Args:
-            episode_id: 节目ID
-            transcript: Transcript对象（会被就地修改）
-            on_progress: 进度回调
-        """
-        from .services.punctuation_restorer import punctuation_restorer
-
-        logger.info(f"[Punctuation] 开始为 {episode_id} 添加标点符号")
-
-        def progress_callback(progress: float):
-            if on_progress:
-                on_progress("punctuation", progress)
-
-        try:
-            # 使用标点恢复器处理
-            punctuated_segments = await punctuation_restorer.restore_punctuation(
-                [seg.model_dump() for seg in transcript.segments],
-                episode_id,
-                progress_callback
-            )
-
-            # 更新transcript对象的segments
-            from .models import Segment
-            transcript.segments = [
-                Segment(**seg) for seg in punctuated_segments
-            ]
-
-            # 保存更新后的transcript文件
-            media_dir = self.data_dir / "media" / episode_id
-            transcript_file = media_dir / "transcript.json"
-
-            import json
-            with open(transcript_file, 'w', encoding='utf-8') as f:
-                json.dump(transcript.model_dump(), f, ensure_ascii=False, indent=2)
-
-            logger.info(f"[Punctuation] 完成 {episode_id} 标点添加")
-
-        except Exception as e:
-            logger.error(f"[Punctuation] 处理失败: {e}", exc_info=True)
-            # 标点添加失败不影响主流程，继续使用原字幕；
-            # 但写一份状态文件让前端能在字幕页提示"标点未生成"，避免用户
-            # 以为是 bug。
-            try:
-                import json as _json
-                status_file = self.data_dir / "media" / episode_id / "punctuation_status.json"
-                status_file.parent.mkdir(parents=True, exist_ok=True)
-                status_file.write_text(_json.dumps({
-                    "status": "failed",
-                    "error_type": type(e).__name__,
-                    "error": str(e),
-                    "failed_at": datetime.now().isoformat(),
-                }, ensure_ascii=False), encoding="utf-8")
-            except Exception:
-                logger.debug("Could not write punctuation_status.json", exc_info=True)
-
     async def cancel(self, episode_id: str) -> bool:
         """取消正在进行的任务"""
         async with self._lock:
@@ -935,19 +841,10 @@ class AudioProcessPipeline:
         _translated_ratio = sum(1 for s in transcript.segments if s.text_translated) / max(len(transcript.segments), 1)
         if transcript.language != "zh" and _translated_ratio < 0.5 and not existing.get('translated'):
             await self._add_stage(stages, "translate", EpisodeStatus.LLM_RUNNING, sync_stages)
-
-            translations = await translate_segments(
+            await SubtitleProcessor().translate(
                 transcript,
                 progress_cb=lambda p: self._update_stage_progress_sync(stages, "translate", p, episode_id, sync_stages),
             )
-            # translate_segments 返回 [{"id": i, "text_zh": "..."}]，不会回填 transcript；
-            # 这里按 id 合并到 segment.text_translated，否则下游 checkpoint / save 拿不到翻译。
-            # 注意：此 merge 必须与 _process_internal 的 translate 阶段保持一致。
-            if translations:
-                by_id = {t.get("id"): (t.get("text_zh") or t.get("text_translated") or "") for t in translations}
-                for seg in transcript.segments:
-                    if seg.id in by_id:
-                        seg.text_translated = by_id[seg.id]
             self._checkpoint_json(episode_id, "transcript.json", transcript.model_dump())
             await self._complete_stage(stages, "translate", completed_stages, sync_stages)
 
