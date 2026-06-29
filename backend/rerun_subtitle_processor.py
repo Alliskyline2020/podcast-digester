@@ -22,6 +22,7 @@ from app.models import Transcript
 from app.database import EpisodeRepository
 
 DATA_DIR = Path(__file__).parent.parent / "data" / "media"
+DONE_MARKER = ".sp_processed"
 processor = SubtitleProcessor()
 
 
@@ -51,7 +52,10 @@ async def process_one(ep_dir: Path) -> dict:
 
     data["segments"] = [s.model_dump() for s in transcript.segments]
     tf.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    await EpisodeRepository.update_transcript(transcript.episode_id, data)
+    ok = await EpisodeRepository.update_transcript(transcript.episode_id, data)
+    # 仅在 DB 写入成功后落 marker，中断后可断点续跑；失败则下次重试该 episode。
+    if ok:
+        (ep_dir / DONE_MARKER).write_text("ok", encoding="utf-8")
 
     return {
         "episode": ep_dir.name,
@@ -67,6 +71,9 @@ async def main():
     print(f">>> 发现 {len(episodes)} 个 episode")
     results = []
     for ep in episodes:
+        if (ep / DONE_MARKER).exists():
+            print(f">>> 跳过 {ep.name}（已处理，删除 .sp_processed 可重跑）", flush=True)
+            continue
         print(f">>> 处理 {ep.name} ...", flush=True)
         try:
             r = await process_one(ep)
