@@ -11,6 +11,7 @@
 """
 import asyncio
 import json
+import logging
 import sys
 from pathlib import Path
 
@@ -80,6 +81,5 @@ async def main():
 
 
 if __name__ == "__main__":
-    logging_setup = __import__("logging")
-    logging_setup.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     asyncio.run(main())
