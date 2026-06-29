@@ -55,3 +55,10 @@ def test_semantic_ok_rejects_hallucination_addition():
 def test_thresholds():
     assert LCS_PRESERVE_MIN == 0.90
     assert LCS_ADD_MAX == 0.15
+
+
+def test_semantic_ok_pure_filler_original():
+    # 原文去口水话后为空(纯口水话句) → 只要输出也很短即通过, 否则失败
+    assert semantic_ok("", "嗯嗯") is True              # 输出空
+    assert semantic_ok("嗯", "嗯嗯") is True             # 输出也很短(嗯 是 filler → p 为空)
+    assert semantic_ok("这是很长的实义内容", "嗯") is False  # 输出凭空加了内容
