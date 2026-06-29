@@ -52,10 +52,12 @@ async def process_one(ep_dir: Path) -> dict:
 
     data["segments"] = [s.model_dump() for s in transcript.segments]
     tf.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    ok = await EpisodeRepository.update_transcript(transcript.episode_id, data)
-    # 仅在 DB 写入成功后落 marker，中断后可断点续跑；失败则下次重试该 episode。
-    if ok:
-        (ep_dir / DONE_MARKER).write_text("ok", encoding="utf-8")
+    db_ok = await EpisodeRepository.update_transcript(transcript.episode_id, data)
+    # 文件已写入即视为本集处理完成 → 落 marker 以便断点续跑。
+    # update_transcript 仅在 episode 不在 DB（孤儿）时返回 False；DB 异常会抛错被外层捕获、不落 marker。
+    if not db_ok:
+        print(f"    ⚠️ 不在 DB（孤儿 episode），仅更新文件: {ep_dir.name}", flush=True)
+    (ep_dir / DONE_MARKER).write_text("ok", encoding="utf-8")
 
     return {
         "episode": ep_dir.name,
