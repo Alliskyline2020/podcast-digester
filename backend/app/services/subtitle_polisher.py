@@ -61,7 +61,7 @@ def build_polish_user(inputs: List[dict]) -> str:
 
 async def polish_subtitles(
     segments: List,  # List[Segment]
-    batch_size: int = 25,
+    batch_size: int = 15,  # non-thinking 模式长批次 JSON 易出错,15 句更稳
     progress_cb: Optional[callable] = None,
     skip_if_punctuated: bool = True,
 ) -> tuple[List, int]:
