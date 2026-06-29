@@ -132,6 +132,7 @@ async def polish_subtitles(
             }
 
             batch_polished = 0
+            fallback = 0
             for seg in batch_to_process:
                 if seg.id in polished_map:
                     new_text = polished_map[seg.id]
@@ -139,6 +140,13 @@ async def polish_subtitles(
                         seg.text_with_punct = new_text
                         batch_polished += 1
                         polished_count += 1
+                        continue
+                # 兜底:LLM 漏掉/返回空的句(实测几乎都是纯口水话如"嗯"/"Um"/"ah")。
+                # 这些句极短,原样保留 text_original 即可(对应真实音频段,
+                # 显示无害),同时保证 text_with_punct 100% 覆盖、时间戳对齐。
+                if not (seg.text_with_punct or "").strip():
+                    seg.text_with_punct = seg.text_original
+                    fallback += 1
 
             logger.info(
                 f"[polish] {start}-{start+len(batch)}/{total}: "
