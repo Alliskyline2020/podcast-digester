@@ -61,6 +61,8 @@ class Segment(BaseModel):
     text_translated: Optional[str] = Field(None, description="中文翻译")
     text_with_punct: Optional[str] = Field(None, description="带标点符号的文本（后处理添加）")
     speaker: Optional[str] = Field(None, description="说话人标签")
+    text_zh: Optional[str] = Field(None, description="中文文本（无论原文还是译文）")
+    text_en: Optional[str] = Field(None, description="英文文本（无论原文还是译文）")
 
 
 class Transcript(BaseModel):
