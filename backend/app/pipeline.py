@@ -266,6 +266,11 @@ class AudioProcessPipeline:
             progress_cb=(lambda p: on_progress("polish", p)) if on_progress else None,
         )
 
+        # P1：润色后重新生成段落映射，让段落字幕消费 text_with_punct（带标点+去口水话）
+        # 而非上面 line-261 用 raw ASR 生成的版本。早期那次调用保留——保证 transcribe
+        # 一完成字幕就可见；这里是"最终态"刷新。
+        await self._generate_paragraph_mappings(episode_id, transcript)
+
         self._checkpoint_json(episode_id, "transcript.json", transcript.model_dump())
         await self._complete_stage(stages, "transcribe", completed_stages, sync_stages)
 
@@ -303,6 +308,10 @@ class AudioProcessPipeline:
                 transcript,
                 progress_cb=lambda p: self._update_stage_progress_sync(stages, "translate", p, episode_id, sync_stages),
             )
+            # P1：翻译后再次刷新段落映射——en-source 现在拿到 text_translated，
+            # 段落级 text_translated 才会填充。zh-source 跳过 translate 块，
+            # 上面的 post-polish 调用就是最终态。
+            await self._generate_paragraph_mappings(episode_id, transcript)
             self._checkpoint_json(episode_id, "transcript.json", transcript.model_dump())
             await self._complete_stage(stages, "translate", completed_stages, sync_stages)
 
@@ -546,33 +555,29 @@ class AudioProcessPipeline:
         return load_json_with_callback(transcript_file, prepare_transcript)
 
     async def _generate_paragraph_mappings(self, episode_id: str, transcript):
-        """生成字幕段落映射
+        """生成字幕段落映射（idempotent，可多次调用）
+
+        P1 修复（语言命名重构 Phase 4a）：通过收敛点
+        `segments_for_segmenter` 构造 segmenter 输入，使段落字幕优先消费
+        `text_with_punct`（润色后带标点文本），而不是 raw ASR。
+        pipeline 会在 transcribe 后（早期可见性）、polish 后、translate 后
+        多次调用本方法 —— 最终态反映最完整的文本。
 
         Args:
             episode_id: 节目 ID
-            transcript: Transcript 对象
+            transcript: Transcript 对象（episode_id 需已设置）
         """
         if not transcript or not transcript.segments:
             logger.info(f"No transcript segments for {episode_id}, skipping paragraph generation")
             return
 
-        # 准备分段器所需的格式
-        # Segment.id 是 int，但 SubtitleSegmenter 需要 str 类型的 id
-        segments_for_segmenter = []
-        for i, seg in enumerate(transcript.segments):
-            seg_dict = {
-                "id": f"seg_{episode_id}_{seg.id}",  # 使用字符串 ID
-                "start_ms": seg.start_ms,
-                "end_ms": seg.end_ms,
-                "text_original": seg.text_original,
-                "text_translated": seg.text_translated,
-                "_index": i
-            }
-            segments_for_segmenter.append(seg_dict)
+        # 收敛点：单一构造 segmenter 输入（P1：优先 text_with_punct）
+        from .services.segmenter_input import segments_for_segmenter
+        segments_input = segments_for_segmenter(transcript)
 
         # 执行分段
         segmenter = SubtitleSegmenter()
-        paragraph_mappings = segmenter.segment(segments_for_segmenter)
+        paragraph_mappings = segmenter.segment(segments_input)
 
         # 持久化
         await EpisodeRepository.update(episode_id, **{
@@ -845,6 +850,11 @@ class AudioProcessPipeline:
                 transcript,
                 progress_cb=lambda p: self._update_stage_progress_sync(stages, "translate", p, episode_id, sync_stages),
             )
+            # P1：翻译后刷新段落映射（与 _process_internal 对齐），
+            # 让 en-source 段落的 text_translated 反映翻译结果。
+            # resume 路径不重跑 polish——transcript.json checkpoint 已带润色文本，
+            # helper 优先用 text_with_punct 即可。
+            await self._generate_paragraph_mappings(episode_id, transcript)
             self._checkpoint_json(episode_id, "transcript.json", transcript.model_dump())
             await self._complete_stage(stages, "translate", completed_stages, sync_stages)
 
