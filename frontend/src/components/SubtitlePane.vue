@@ -16,7 +16,7 @@
       >
         <span class="subtitle-time">{{ formatTime(item.start_ms) }}</span>
         <span class="subtitle-text">
-          {{ item.text_with_punct || item.text_translated || item.text_original }}
+          {{ segmentLine(item) }}
         </span>
       </div>
     </RecycleScroller>
@@ -31,12 +31,25 @@ import { computed } from 'vue'
 import { RecycleScroller } from 'vue-virtual-scroller'
 import { usePlayer } from '../composables/player'
 
-const { currentTime, transcriptSegments, seekTo, formatTime } = usePlayer()
+const { currentTime, transcriptSegments, seekTo, formatTime, bundle } = usePlayer()
+
+// 模板按 `segments` 绑定；usePlayer 暴露的是 transcriptSegments。
+const segments = transcriptSegments
 
 // 判断当前段落
 const isCurrentSegment = (segment) => {
   if (!currentTime.value) return false
   return segment.start_ms <= currentTime.value && segment.end_ms > currentTime.value
+}
+
+// 单行字幕跟随音频语种：英文播客显英文，否则显中文。
+// segments 已带 text_zh/text_en；缺失时回退到带标点原文/译文。
+const displayLang = computed(() => (bundle.value?.episode?.language === 'en' ? 'en' : 'zh'))
+const segmentLine = (item) => {
+  if (displayLang.value === 'en') {
+    return item.text_en || item.text_with_punct || item.text_translated || item.text_original || ''
+  }
+  return item.text_zh || item.text_with_punct || item.text_translated || item.text_original || ''
 }
 </script>
 

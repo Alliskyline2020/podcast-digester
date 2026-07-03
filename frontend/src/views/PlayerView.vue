@@ -278,25 +278,25 @@
             </div>
             <div class="language-toggles">
               <button
-                @click="subtitleLang = 'original'"
-                :class="{ active: subtitleLang === 'original' }"
-                :disabled="!hasOriginal"
-                class="lang-btn"
-              >
-                英文
-              </button>
-              <button
-                @click="subtitleLang = 'translated'"
-                :class="{ active: subtitleLang === 'translated' }"
-                :disabled="!hasTranslated"
+                @click="subtitleLang = 'zh'"
+                :class="{ active: subtitleLang === 'zh' }"
+                :disabled="!hasZh"
                 class="lang-btn"
               >
                 中文
               </button>
               <button
-                @click="subtitleLang = 'both'"
-                :class="{ active: subtitleLang === 'both' }"
-                :disabled="!hasTranslated"
+                @click="subtitleLang = 'en'"
+                :class="{ active: subtitleLang === 'en' }"
+                :disabled="!hasEn"
+                class="lang-btn"
+              >
+                英文
+              </button>
+              <button
+                @click="subtitleLang = 'dual'"
+                :class="{ active: subtitleLang === 'dual' }"
+                :disabled="!hasEn"
                 class="lang-btn"
               >
                 双语
@@ -333,8 +333,8 @@
                 >
                   <span class="block-time">{{ formatTimeRange(item.start_ms, item.end_ms) }}</span>
                   <div class="block-content">
-                    <span v-if="subtitleLang === 'original' || subtitleLang === 'both'" class="block-text">{{ item.text_clean || item.text_original }}</span>
-                    <span v-if="subtitleLang === 'translated' || subtitleLang === 'both'" class="block-translated">{{ item.text_translated || item.text_clean || item.text_original }}</span>
+                    <span v-if="subtitleLang === 'zh' || subtitleLang === 'dual'" class="block-text">{{ item.text_zh || item.text_clean || item.text_original }}</span>
+                    <span v-if="subtitleLang === 'en' || subtitleLang === 'dual'" class="block-translated">{{ item.text_en || item.text_original }}</span>
                   </div>
                 </div>
               </DynamicScrollerItem>
@@ -563,6 +563,7 @@ import * as api from '@/api'
 import { usePlayer } from '@/composables/player'
 import { useSubtitleScroll } from '@/composables/useSubtitleScroll'
 import { DynamicScroller, DynamicScrollerItem } from 'vue-virtual-scroller'
+import { routeText } from '@/utils/langRoute'
 // SubtitleMapping 组件已移除 - 改为直接显示时间范围
 
 const router = useRouter()
@@ -611,7 +612,14 @@ const {
   onAudioSeeking,
   onAudioSeeked,
 } = useAudioPlayback({ seekTo, audioRef })
-const subtitleLang = ref('original')
+// 字幕显示语种：zh / en / dual。默认跟随音频语种（中文播客默认 zh，
+// 英文播客默认 en）；切换 episode 时随 episode.language 重新评估。
+const subtitleLang = ref('zh')
+watch(
+  () => bundle.value?.episode?.language,
+  (lang) => { subtitleLang.value = lang === 'en' ? 'en' : 'zh' },
+  { immediate: true },
+)
 // 左栏宽度（可拖拽调整），通过 CSS 变量 --left-width 驱动 grid 第一列宽
 const leftPanelWidth = ref(320)
 const startResize = (e) => {
@@ -696,10 +704,12 @@ const paragraphs = computed(() => {
     // 后端 paragraph_mappings 部分生成路径没带 id 字段,
     // DynamicScroller key-field="id" 会报 "Key is undefined" 挂掉。
     // 这里兜底给每个段落补 id(用 index,稳定且唯一)。
-    return bundle.value.episode.paragraph_mappings.map((p, i) => ({
-      ...p,
-      id: p.id ?? i,
-    }))
+    return bundle.value.episode.paragraph_mappings.map((p, i) => {
+      // Derive text_zh/text_en by content-routing (locale-agnostic: correct
+      // even when text_original came from a wrong-locale ASR, e.g. Yao).
+      const { text_zh, text_en } = routeText(p.text_clean || p.text_original, p.text_translated)
+      return { ...p, id: p.id ?? i, text_zh: p.text_zh || text_zh, text_en: p.text_en || text_en }
+    })
   }
 
   // Fallback to frontend paragraph generation
@@ -730,13 +740,16 @@ const paragraphs = computed(() => {
     if (hasMinContent && wouldExceed) {
       // 保存当前段落
       if (currentPara.segments.length > 0) {
+        const { text_zh, text_en } = routeText(currentPara.text, currentPara.translated)
         result.push({
           id: currentPara.id,
           start_ms: currentPara.segments[0].start_ms,
           end_ms: currentPara.segments[currentPara.segments.length - 1].end_ms,
           text_original: currentPara.text,
           text_translated: currentPara.translated,
-          text_clean: currentPara.text
+          text_clean: currentPara.text,
+          text_zh,
+          text_en
         })
       }
       // 开始新段落
@@ -787,8 +800,8 @@ const firstSegmentMs = (ids) => {
   return seg?.start_ms ?? null
 }
 
-const hasOriginal = computed(() => segments.value.length > 0)
-const hasTranslated = computed(() => segments.value.some(s => s.text_translated))
+const hasZh = computed(() => paragraphs.value.some(p => p.text_zh))
+const hasEn = computed(() => paragraphs.value.some(p => p.text_en))
 
 const isCurrentParagraph = (para) => {
   if (!currentTime.value) return false
