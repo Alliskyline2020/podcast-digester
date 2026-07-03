@@ -17,6 +17,7 @@ from ..prompts import (
     build_highlight_verify_user,
 )
 from ..models import HighlightCard, HighlightItem, VerdictType, ConfidenceType, HighlightKind
+from ._segtext import chinese_text
 
 if TYPE_CHECKING:
     from ..models import Transcript
@@ -225,7 +226,7 @@ def _build_highlight_review_block(
         for sid in h.cited_segment_ids[:3]:
             seg = seg_by_id.get(sid)
             if seg:
-                cited_texts.append(f"[{sid}] {seg.text_translated or seg.text_original}")
+                cited_texts.append(f"[{sid}] {chinese_text(seg)}")
         lines.append(
             f"[{i}] kind={h.kind.value}\n"
             f"  text: {h.text_zh}\n"
@@ -348,7 +349,7 @@ def _build_raw_transcript_ranked(
             seg = seg_by_id.get(seg_id)
             if seg is None:
                 continue
-            text = seg.text_translated or seg.text_original
+            text = chinese_text(seg)
             lines.append(f"{seg.id} | {text}")
             count += 1
             chapter_seg_count += 1
@@ -407,7 +408,7 @@ def _split_chapters_into_batches(
         for seg_id in range(start, end + 1):
             seg = seg_by_id.get(seg_id)
             if seg is not None:
-                text = seg.text_translated or seg.text_original
+                text = chinese_text(seg)
                 out.append((seg.id, text))
         return out
 
@@ -498,7 +499,7 @@ def _build_raw_transcript(
             seg = seg_by_id.get(seg_id)
             if seg is None:
                 continue
-            text = seg.text_translated or seg.text_original
+            text = chinese_text(seg)
             lines.append(f"{seg.id} | {text}")
             count += 1
         if count >= max_segments:

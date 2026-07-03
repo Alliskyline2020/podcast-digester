@@ -12,6 +12,7 @@ import logging
 from typing import List, Dict, Any, Optional, TYPE_CHECKING
 from ..llm import chat_json
 from ..prompts import SUMMARIZE_SYSTEM, build_summarize_user
+from ._segtext import chinese_text
 
 if TYPE_CHECKING:
     from ..models import Transcript
@@ -48,7 +49,7 @@ async def generate_chapter_summary(
         chapter_segs = chapter_segs[::step]
 
     seg_block = "\n".join(
-        f"{seg.id} | {seg.text_translated or seg.text_original}"
+        f"{seg.id} | {chinese_text(seg)}"
         for seg in chapter_segs
     )
 

@@ -15,6 +15,7 @@ from ..prompts import (
 )
 from ..models import ProductInsights, InsightItem, InsightGroup, InsightCategory
 from .insight_utils import dedup_insights, dedup_entities, apply_topk
+from ._segtext import chinese_text
 
 if TYPE_CHECKING:
     from ..models import Transcript, Outline, ChapterSummary, HighlightCard
@@ -202,7 +203,7 @@ def _build_insight_review_block(
         for sid in it.cited_segment_ids[:3]:
             seg = seg_by_id.get(sid)
             if seg:
-                cited_texts.append(f"[{sid}] {seg.text_translated or seg.text_original}")
+                cited_texts.append(f"[{sid}] {chinese_text(seg)}")
         lines.append(
             f"[{domain}:{i}] category={it.category.value}\n"
             f"  text: {it.text_zh}\n"
@@ -341,7 +342,7 @@ def _build_raw_transcript(
             seg = seg_by_id.get(seg_id)
             if seg is None:
                 continue
-            text = seg.text_translated or seg.text_original
+            text = chinese_text(seg)
             lines.append(f"{seg.id} | {text}")
             count += 1
         if count >= max_segments:
