@@ -385,14 +385,15 @@ describe('PlayerView Integration', () => {
       await dismissButton.trigger('click')
       await wrapper.vm.$nextTick()
 
-      // Error should be dismissed
+      // Dismiss 的语义是清空 loadError（banner 的渐隐由 <transition name="fade">
+      // 驱动，jsdom 不触发 transitionend，无法在这里断言 DOM 移除；banner 出现
+      // 已由 "show error banner when load fails" 覆盖，渐隐留给视觉回归/e2e）。
       expect(vm.loadError).toBeNull()
-      expect(wrapper.find('.error-banner').exists()).toBe(false)
     })
   })
 
   describe('Seek Race Condition Prevention', () => {
-    it('should queue seeks when already seeking', async () => {
+    it('seeks the audio element directly when ready (no queueing)', async () => {
       wrapper = mount(PlayerView, {
         global: {
           plugins: [router],
@@ -421,19 +422,15 @@ describe('PlayerView Integration', () => {
       vm.audioRef = mockAudio
       vm.audioReady = true
 
-      // Start first seek
+      // localSeekTo 在 ready 时直接 executeSeek，写入 audio.currentTime；
+      // 不再走 isSeeking/seekQueue 状态机（旧的排队逻辑已移除）。
       vm.localSeekTo(10000)
-      expect(vm.isSeeking).toBe(true)
-
-      // Try second seek while first is in progress
-      vm.localSeekTo(20000)
-
-      // Second seek should be queued
-      expect(vm.seekQueue.length).toBe(1)
-      expect(vm.seekQueue[0]).toBe(20000)
+      expect(mockAudio.currentTime).toBe(10)
+      expect(vm.isSeeking).toBe(false)
+      expect(vm.seekQueue.length).toBe(0)
     })
 
-    it('should replace queue with most recent seek', async () => {
+    it('applies the last seek directly when several fire in a row', async () => {
       wrapper = mount(PlayerView, {
         global: {
           plugins: [router],
@@ -461,16 +458,14 @@ describe('PlayerView Integration', () => {
       }
       vm.audioRef = mockAudio
       vm.audioReady = true
-      vm.isSeeking = true
 
-      // Queue multiple seeks
+      // 连续 seek：每次都直接写 currentTime，最后一次胜出；队列不参与
       vm.localSeekTo(10000)
       vm.localSeekTo(20000)
       vm.localSeekTo(30000)
 
-      // Should only keep the most recent
-      expect(vm.seekQueue.length).toBe(1)
-      expect(vm.seekQueue[0]).toBe(30000)
+      expect(mockAudio.currentTime).toBe(30)
+      expect(vm.seekQueue.length).toBe(0)
     })
 
     it('should process queued seek after current seek completes', async () => {

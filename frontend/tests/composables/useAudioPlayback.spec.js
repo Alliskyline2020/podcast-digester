@@ -36,8 +36,9 @@ describe('useAudioPlayback', () => {
       const h = makeHarness()
       h.audioReady.value = true
       h.localSeekTo(0)
-      // 0 是合法值，不应该在 "invalid timestamp" 分支被拒绝
-      expect(h.isSeeking.value).toBe(true)
+      // 0 是合法值，不应在 "invalid timestamp" 分支被拒绝；ready 时直接执行
+      // seek，audio.currentTime 落到 0（不再走 isSeeking 状态机）。
+      expect(h.audioRef.value.currentTime).toBe(0)
     })
   })
 
@@ -67,43 +68,35 @@ describe('useAudioPlayback', () => {
     })
   })
 
-  describe('seek queue: only latest survives', () => {
-    it('replaces queue when seeking while busy', () => {
+  describe('direct seek path (no queueing)', () => {
+    it('applies each seek directly to audio.currentTime; seekQueue stays empty', () => {
       const h = makeHarness()
       h.audioReady.value = true
-      h.localSeekTo(1000) // 进入 isSeeking 状态
-      expect(h.isSeeking.value).toBe(true)
-
-      // 在 isSeeking 期间排队 3 次 seek
-      h.localSeekTo(2000)
+      // localSeekTo 在 ready 时直接 executeSeek，不再排队（旧的 queue 逻辑已移除）
+      h.localSeekTo(1000)
       h.localSeekTo(3000)
       h.localSeekTo(4000)
-
-      // 只保留最后一个，避免积压
-      expect(h.seekQueue.value).toEqual([4000])
+      // 浏览器对 audio.currentTime 的连续写入是"最后一次胜出"；队列始终为空
+      expect(h.audioRef.value.currentTime).toBe(4)
+      expect(h.seekQueue.value).toEqual([])
     })
   })
 
-  describe('onAudioSeeked flushes queue', () => {
-    it('clears isSeeking and pulls next seek from queue', () => {
+  describe('onAudioSeeked flushes a seeded queue', () => {
+    it('drains seekQueue and executes the next seek after setTimeout(50)', () => {
       const h = makeHarness()
       h.audioReady.value = true
-      h.localSeekTo(1000)
-      h.localSeekTo(2000) // queued
-      expect(h.isSeeking.value).toBe(true)
-      expect(h.seekQueue.value).toEqual([2000])
+      // 队列不由 localSeekTo 填充；直接模拟外部入队后 onAudioSeeked 的排空行为
+      h.seekQueue.value = [2000]
 
       h.onAudioSeeked()
-      // isSeeking should be cleared; queue drained
+      // isSeeking 清零；队列被排空
       expect(h.isSeeking.value).toBe(false)
       expect(h.seekQueue.value).toEqual([])
 
-      // The queued seek should fire after setTimeout(50)
-      // Fast-forward fake timers
+      // 排空的那条 seek 在 setTimeout(50) 后执行 → currentTime 落到 2s
       vi.advanceTimersByTime(60)
-      // After flush, audio.pause was called by executeSeek
-      // (the queued 2000 should have triggered executeSeek)
-      expect(h.audioRef.value.pause).toHaveBeenCalled()
+      expect(h.audioRef.value.currentTime).toBe(2)
     })
   })
 
@@ -122,8 +115,9 @@ describe('useAudioPlayback', () => {
       expect(h.pendingSeek.value).toBe(null)
 
       vi.advanceTimersByTime(10)
-      // executeSeek should have run, which calls audio.pause + sets currentTime
-      expect(h.audioRef.value.pause).toHaveBeenCalled()
+      // pendingSeek 在 canplay 后被排空并执行 → currentTime 落到 7s
+      // （seek 路径不再 pause；是否续播取决于 audio.paused）
+      expect(h.audioRef.value.currentTime).toBe(7)
     })
 
     it('skips canplay if already ready and past 1s playback (avoid spurious replay)', () => {
@@ -147,23 +141,27 @@ describe('useAudioPlayback', () => {
       expect(h.audioRef.value.currentTime).toBe(12.345)
     })
 
-    it('plays after seek if landing within tolerance', () => {
+    it('resumes playback after seek only when audio was paused', () => {
       const h = makeHarness()
+      // mock audio 默认无 paused 字段 → falsy → executeSeek 不会触发 play
       h.executeSeek(1000)
-      // Before timer fires, play not yet called
       expect(h.audioRef.value.play).not.toHaveBeenCalled()
-      vi.advanceTimersByTime(110)
+
+      // 标记为暂停：seek 后自动续播（用户点章节/金句的语义是"跳到这里继续听"）
+      h.audioRef.value.paused = true
+      h.executeSeek(2000)
       expect(h.audioRef.value.play).toHaveBeenCalled()
     })
 
-    it('retries when first seek did not land', () => {
+    it('does not retry-correct drift after seek', () => {
       const h = makeHarness()
       h.executeSeek(1000)
-      // simulate browser NOT landing on target (drift > 1s)
+      expect(h.audioRef.value.currentTime).toBe(1)
+      // 模拟浏览器漂移：currentTime 被外部改写后，seek 路径不会自动重试校正
+      // （旧的 pause-first + 100ms retry 逻辑已移除）
       h.audioRef.value.currentTime = 50
       vi.advanceTimersByTime(110)
-      // Should have retried: currentTime reset to target
-      expect(h.audioRef.value.currentTime).toBe(1)
+      expect(h.audioRef.value.currentTime).toBe(50)
     })
   })
 })

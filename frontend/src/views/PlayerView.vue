@@ -1173,6 +1173,40 @@ onUnmounted(() => {
   seekQueue.value = []
   pendingSeek.value = null
 })
+
+// <script setup> 默认对外闭合：父组件 / wrapper.vm 看不到任何顶层绑定。
+// 这里显式暴露播放器对外的命令式 API 与可观测状态，供集成测试与未来的
+// 父组件 ref 调用使用（ paragraphs / 错误状态 / seek 状态机入口等）。
+defineExpose({
+  // 数据 & 派生
+  paragraphs,
+  segments,
+  bundle,
+  loadError,
+  loadErrorMessage,
+  // 字幕语种显示状态
+  subtitleLang,
+  hasZh,
+  hasEn,
+  // 滚动
+  transcriptContainer,
+  scrollToActive,
+  cleanupScroll,
+  // 段落判定
+  isCurrentParagraph,
+  // 音频播放状态机（来自 useAudioPlayback）
+  audioRef,
+  audioReady,
+  pendingSeek,
+  isSeeking,
+  seekQueue,
+  localSeekTo,
+  executeSeek,
+  onAudioSeeked,
+  onCanPlay,
+  // 来自全局 usePlayer 的时间
+  currentTime,
+})
 </script>
 
 <style scoped>
