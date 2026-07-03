@@ -26,10 +26,15 @@ describe('useAudioPlayback', () => {
   describe('localSeekTo sanity guards', () => {
     it('ignores invalid timestamp (null/undefined)', () => {
       const h = makeHarness()
-      const before = h.isSeeking.value
+      h.audioReady.value = true
+      const ctBefore = h.audioRef.value.currentTime
       h.localSeekTo(undefined)
       h.localSeekTo(null)
-      expect(h.isSeeking.value).toBe(before)
+      // 无效时间戳在入口直接 return：不写 currentTime、不存 pendingSeek、
+      // 也不退到外部 seekTo。
+      expect(h.audioRef.value.currentTime).toBe(ctBefore)
+      expect(h.pendingSeek.value).toBe(null)
+      expect(h.seekToExternal).not.toHaveBeenCalled()
     })
 
     it('accepts timestamp 0 (valid seek to start)', () => {
@@ -37,7 +42,7 @@ describe('useAudioPlayback', () => {
       h.audioReady.value = true
       h.localSeekTo(0)
       // 0 是合法值，不应在 "invalid timestamp" 分支被拒绝；ready 时直接执行
-      // seek，audio.currentTime 落到 0（不再走 isSeeking 状态机）。
+      // seek，audio.currentTime 落到 0。
       expect(h.audioRef.value.currentTime).toBe(0)
     })
   })
@@ -57,7 +62,6 @@ describe('useAudioPlayback', () => {
       expect(h.audioReady.value).toBe(false)
       h.localSeekTo(5000)
       expect(h.pendingSeek.value).toBe(5000)
-      expect(h.isSeeking.value).toBe(false)
     })
 
     it('stores pendingSeek when duration is 0', () => {
@@ -68,35 +72,16 @@ describe('useAudioPlayback', () => {
     })
   })
 
-  describe('direct seek path (no queueing)', () => {
-    it('applies each seek directly to audio.currentTime; seekQueue stays empty', () => {
+  describe('direct seek path', () => {
+    it('applies each seek directly to audio.currentTime (last write wins)', () => {
       const h = makeHarness()
       h.audioReady.value = true
-      // localSeekTo 在 ready 时直接 executeSeek，不再排队（旧的 queue 逻辑已移除）
+      // localSeekTo 在 ready 时直接 executeSeek（无排队）
       h.localSeekTo(1000)
       h.localSeekTo(3000)
       h.localSeekTo(4000)
-      // 浏览器对 audio.currentTime 的连续写入是"最后一次胜出"；队列始终为空
+      // 浏览器对 audio.currentTime 的连续写入：最后一次胜出
       expect(h.audioRef.value.currentTime).toBe(4)
-      expect(h.seekQueue.value).toEqual([])
-    })
-  })
-
-  describe('onAudioSeeked flushes a seeded queue', () => {
-    it('drains seekQueue and executes the next seek after setTimeout(50)', () => {
-      const h = makeHarness()
-      h.audioReady.value = true
-      // 队列不由 localSeekTo 填充；直接模拟外部入队后 onAudioSeeked 的排空行为
-      h.seekQueue.value = [2000]
-
-      h.onAudioSeeked()
-      // isSeeking 清零；队列被排空
-      expect(h.isSeeking.value).toBe(false)
-      expect(h.seekQueue.value).toEqual([])
-
-      // 排空的那条 seek 在 setTimeout(50) 后执行 → currentTime 落到 2s
-      vi.advanceTimersByTime(60)
-      expect(h.audioRef.value.currentTime).toBe(2)
     })
   })
 

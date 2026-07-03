@@ -392,7 +392,7 @@ describe('PlayerView Integration', () => {
     })
   })
 
-  describe('Seek Race Condition Prevention', () => {
+  describe('Seek Behavior', () => {
     it('seeks the audio element directly when ready (no queueing)', async () => {
       wrapper = mount(PlayerView, {
         global: {
@@ -422,12 +422,9 @@ describe('PlayerView Integration', () => {
       vm.audioRef = mockAudio
       vm.audioReady = true
 
-      // localSeekTo 在 ready 时直接 executeSeek，写入 audio.currentTime；
-      // 不再走 isSeeking/seekQueue 状态机（旧的排队逻辑已移除）。
+      // localSeekTo 在 ready 时直接 executeSeek，写入 audio.currentTime。
       vm.localSeekTo(10000)
       expect(mockAudio.currentTime).toBe(10)
-      expect(vm.isSeeking).toBe(false)
-      expect(vm.seekQueue.length).toBe(0)
     })
 
     it('applies the last seek directly when several fire in a row', async () => {
@@ -459,85 +456,12 @@ describe('PlayerView Integration', () => {
       vm.audioRef = mockAudio
       vm.audioReady = true
 
-      // 连续 seek：每次都直接写 currentTime，最后一次胜出；队列不参与
+      // 连续 seek：每次都直接写 currentTime，最后一次胜出。
       vm.localSeekTo(10000)
       vm.localSeekTo(20000)
       vm.localSeekTo(30000)
 
       expect(mockAudio.currentTime).toBe(30)
-      expect(vm.seekQueue.length).toBe(0)
-    })
-
-    it('should process queued seek after current seek completes', async () => {
-      wrapper = mount(PlayerView, {
-        global: {
-          plugins: [router],
-          stubs: {
-            SubtitleMapping: { template: '<div></div>' }
-          }
-        },
-        props: {
-          id: 'test-episode-seek-process'
-        }
-      })
-
-      await wrapper.vm.$nextTick()
-      await new Promise(resolve => setTimeout(resolve, 100))
-
-      const vm = wrapper.vm
-
-      // Set up mock audio
-      const mockAudio = {
-        readyState: 4,
-        duration: 1000,
-        currentTime: 0,
-        pause: vi.fn(),
-        play: vi.fn().mockResolvedValue(undefined)
-      }
-      vm.audioRef = mockAudio
-      vm.audioReady = true
-
-      // Queue a seek
-      vm.isSeeking = true
-      vm.seekQueue = [15000]
-
-      // Trigger onAudioSeeked to simulate seek completion
-      vm.onAudioSeeked()
-
-      await wrapper.vm.$nextTick()
-      await new Promise(resolve => setTimeout(resolve, 100))
-
-      // Queue should be processed and cleared
-      expect(vm.seekQueue.length).toBe(0)
-      expect(mockAudio.currentTime).toBe(15) // 15000ms = 15s
-    })
-
-    it('should reset seeking flag after seek completes', async () => {
-      wrapper = mount(PlayerView, {
-        global: {
-          plugins: [router],
-          stubs: {
-            SubtitleMapping: { template: '<div></div>' }
-          }
-        },
-        props: {
-          id: 'test-episode-seek-reset'
-        }
-      })
-
-      await wrapper.vm.$nextTick()
-      await new Promise(resolve => setTimeout(resolve, 100))
-
-      const vm = wrapper.vm
-
-      // Set seeking flag
-      vm.isSeeking = true
-
-      // Simulate seek completion
-      vm.onAudioSeeked()
-
-      // Flag should be reset
-      expect(vm.isSeeking).toBe(false)
     })
   })
 
@@ -591,16 +515,12 @@ describe('PlayerView Integration', () => {
       const vm = wrapper.vm
 
       // Set up state that needs cleanup
-      vm.isSeeking = true
-      vm.seekQueue = [10000, 20000]
       vm.pendingSeek = 5000
 
       // Unmount component
       wrapper.unmount()
 
-      // State should be cleared
-      expect(vm.isSeeking).toBe(false)
-      expect(vm.seekQueue.length).toBe(0)
+      // pending seek should be cleared on unmount
       expect(vm.pendingSeek).toBeNull()
     })
   })

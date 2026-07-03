@@ -43,7 +43,6 @@
         @canplay="onCanPlay"
         @canplaythrough="onCanPlayThrough"
         @loadeddata="onLoadedData"
-        @seeked="onAudioSeeked"
         @seeking="onAudioSeeking"
         preload="auto"
         controls
@@ -596,21 +595,18 @@ const transcriptContainer = ref(null)
 // DynamicScroller 实例引用，用于把它的 scrollToItem 注入到 useSubtitleScroll
 const transcriptScroller = ref(null)
 
-// 音频播放状态机：seek 排队、canplay/seeked 事件、pendingSeek 处理。
-// 一并接管 audioReady / pendingSeek / isSeeking / seekQueue 状态。
+// 音频播放状态机：直接 seek、canplay 事件、pendingSeek 兜底。
+// 一并接管 audioReady / pendingSeek 状态。
 import { useAudioPlayback } from '@/composables/useAudioPlayback'
 const {
   audioReady,
   pendingSeek,
-  isSeeking,
-  seekQueue,
   executeSeek,
   localSeekTo,
   onCanPlay,
   onLoadedData,
   onCanPlayThrough,
   onAudioSeeking,
-  onAudioSeeked,
 } = useAudioPlayback({ seekTo, audioRef })
 // 字幕显示语种：zh / en / dual。默认跟随音频语种（中文播客默认 zh，
 // 英文播客默认 en）；切换 episode 时随 episode.language 重新评估。
@@ -651,8 +647,6 @@ const showExportModal = ref(false)
 // Error states
 const loadError = ref(null)
 const loadErrorMessage = ref('')
-
-// isSeeking / seekQueue 已迁移到 useAudioPlayback（composable），见上方解构。
 
 // Tab 状态
 const activeTab = ref('summary')
@@ -1168,9 +1162,7 @@ onUnmounted(() => {
   // Clear user scroll timeout
   if (userScrollTimeout) clearTimeout(userScrollTimeout)
 
-  // Clear any pending seeks
-  isSeeking.value = false
-  seekQueue.value = []
+  // Clear any pending seek
   pendingSeek.value = null
 })
 
@@ -1198,11 +1190,8 @@ defineExpose({
   audioRef,
   audioReady,
   pendingSeek,
-  isSeeking,
-  seekQueue,
   localSeekTo,
   executeSeek,
-  onAudioSeeked,
   onCanPlay,
   // 来自全局 usePlayer 的时间
   currentTime,

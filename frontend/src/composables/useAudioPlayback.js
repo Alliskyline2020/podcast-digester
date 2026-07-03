@@ -1,11 +1,12 @@
 /**
- * 音频播放状态机：seek 排队 + 事件处理。
+ * 音频播放状态机：直接 seek + canplay 事件处理 + pendingSeek 兜底。
  *
- * 抽取自 PlayerView.vue。把 audioRef / canplay / seeking / seeked 这套
- * 状态机集中在一个地方，PlayerView 只负责把模板上的事件绑到这些 handler。
+ * 抽取自 PlayerView.vue。把 audioRef / canplay / pendingSeek 这套状态机集中
+ * 在一个地方，PlayerView 只负责把模板上的事件绑到这些 handler。
  *
- * 关键解决：避免远距离 seek 在 audio 未就绪时丢失、避免快速连续 seek
- * 互相覆盖。pendingSeek + seekQueue 一起实现"最后一次 seek 生效"语义。
+ * 关键解决：避免远距离 seek 在 audio 未就绪时丢失——未就绪时存为 pendingSeek，
+ * canplay 后排空执行。ready 时直接写 audio.currentTime（浏览器对连续写入是
+ * "最后一次胜出"，不需要应用层排队）。
  *
  * @param {Object} deps
  * @param {() => void} deps.seekTo              来自全局 usePlayer 的 seekTo，
@@ -18,8 +19,6 @@ export function useAudioPlayback({ seekTo, audioRef }) {
   // ============ 内部状态 ============
   const audioReady = ref(false)
   const pendingSeek = ref(null)
-  const isSeeking = ref(false)
-  const seekQueue = ref([])
 
   // ============ 实际执行 seek ============
   const executeSeek = (ms) => {
@@ -113,34 +112,17 @@ export function useAudioPlayback({ seekTo, audioRef }) {
     // 主要用于日志/调试，目前无副作用
   }
 
-  const onAudioSeeked = () => {
-    // seek 完成：清状态，处理队列里下一位
-    isSeeking.value = false
-
-    if (seekQueue.value.length > 0) {
-      const nextSeek = seekQueue.value.shift()
-      setTimeout(() => {
-        if (audioRef.value && audioReady.value) {
-          executeSeek(nextSeek)
-        }
-      }, 50)
-    }
-  }
-
   return {
     // state（对外只读；写仅通过下面的方法）
     audioReady,
     pendingSeek,
-    isSeeking,
-    seekQueue,
     // imperative API
     executeSeek,
     localSeekTo,
-    // event handlers (绑到 <audio> 的 @canplay / @seeked 等)
+    // event handlers (绑到 <audio> 的 @canplay 等)
     onCanPlay,
     onLoadedData,
     onCanPlayThrough,
     onAudioSeeking,
-    onAudioSeeked,
   }
 }
