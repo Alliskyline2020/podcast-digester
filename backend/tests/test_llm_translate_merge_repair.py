@@ -120,3 +120,32 @@ async def test_translate_segments_repairs_merged_echo_followers(monkeypatch):
     # 80/81 不再是英文原文回显
     assert by_id[80] != "sponsors in the description, where you can also find links"
     assert by_id[81] != "to contact me, ask questions, give feedback, and so on."
+
+
+# ---------------------------------------------------------------------------
+# apply_translations: 剥离 LLM 误把 "id | " 前缀当正文译出的泄漏
+# ---------------------------------------------------------------------------
+
+from app.llm_pipeline.llm_translate import _strip_id_prefix, apply_translations  # noqa: E402
+
+
+def test_strip_id_prefix_removes_leading_id_pipe():
+    assert _strip_id_prefix("350 | 之类的说法。") == "之类的说法。"
+    assert _strip_id_prefix("1608 | 我8，也就是9。") == "我8，也就是9。"
+
+
+def test_strip_id_prefix_leaves_clean_text_alone():
+    # 普通中文/英文不该被误删
+    assert _strip_id_prefix("这是没有前缀的中文。") == "这是没有前缀的中文。"
+    assert _strip_id_prefix("") == ""
+    assert _strip_id_prefix("IE 8、IE 9。") == "IE 8、IE 9。"
+
+
+def test_apply_translations_strips_id_prefix_leak():
+    """LLM 把 "id | text" 前缀当正文译出时,apply_translations 应剥掉前缀。"""
+    segs = [Segment(id=0, start_ms=0, end_ms=1000, text_original="hello")]
+    t = Transcript(episode_id="ep_test", language="en", segments=segs)
+    translations = [{"id": 0, "text_zh": "0 | 你好"}]
+    apply_translations(t, translations)
+    assert segs[0].text_translated == "你好"
+

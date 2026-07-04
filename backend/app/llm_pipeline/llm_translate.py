@@ -31,6 +31,16 @@ def _has_cjk(text: str) -> bool:
     return bool(_CJK_RE.search(text or ""))
 
 
+# translate 的 user 输入是 "id | text",LLM 偶尔把 "id | " 前缀当正文译出来
+# (如 text_zh = "350 | 之类的说法…")。剥掉这个泄漏前缀。
+_ID_PREFIX_LEAK = _re.compile(r"^\s*\d+\s*\|\s*")
+
+
+def _strip_id_prefix(text: str) -> str:
+    """去掉 LLM 误把输入 'id | ' 前缀当正文译出的泄漏。"""
+    return _ID_PREFIX_LEAK.sub("", text or "", count=1)
+
+
 def _merge_group_ids(segments, translations_by_id) -> set:
     """识别需要按 1:1 重译的合并组 id 集合。
 
@@ -259,7 +269,7 @@ def apply_translations(transcript: "Transcript", translations: List[Dict]) -> No
         transcript: Transcript 对象（会被就地修改）
         translations: 翻译结果列表
     """
-    translation_map = {t["id"]: t["text_zh"] for t in translations}
+    translation_map = {t["id"]: _strip_id_prefix(t["text_zh"]) for t in translations}
 
     for seg in transcript.segments:
         if seg.id in translation_map:
