@@ -263,7 +263,7 @@ class AudioProcessPipeline:
         # === 阶段 2.5: 字幕润色（双语，加标点+去口水话，时间戳/语义/段数不变）===
         await SubtitleProcessor().polish(
             transcript,
-            progress_cb=(lambda p: on_progress("polish", p)) if on_progress else None,
+            progress_cb=self._make_db_progress_cb(stages, "transcribe", episode_id),
         )
 
         # P1：润色后重新生成段落映射，让段落字幕消费 text_with_punct（带标点+去口水话）
@@ -279,7 +279,7 @@ class AudioProcessPipeline:
 
         chapters = await split_into_chapters(
             transcript,
-            progress_cb=lambda p: self._update_stage_progress_sync(stages, "chapterize", p, episode_id, sync_stages),
+            progress_cb=self._make_db_progress_cb(stages, "chapterize", episode_id),
         )
         self._checkpoint_json(episode_id, "outline.json", {"entries": chapters})
         await self._complete_stage(stages, "chapterize", completed_stages, sync_stages)
@@ -289,7 +289,7 @@ class AudioProcessPipeline:
 
         summaries = await generate_chapter_summaries(
             chapters, transcript,
-            progress_cb=lambda p: self._update_stage_progress_sync(stages, "summarize", p, episode_id, sync_stages),
+            progress_cb=self._make_db_progress_cb(stages, "summarize", episode_id),
         )
         self._checkpoint_json(episode_id, "summaries.json", summaries)
         await self._complete_stage(stages, "summarize", completed_stages, sync_stages)
@@ -306,7 +306,7 @@ class AudioProcessPipeline:
             await self._add_stage(stages, "translate", EpisodeStatus.LLM_RUNNING, sync_stages)
             await SubtitleProcessor().translate(
                 transcript,
-                progress_cb=lambda p: self._update_stage_progress_sync(stages, "translate", p, episode_id, sync_stages),
+                progress_cb=self._make_db_progress_cb(stages, "translate", episode_id),
             )
             # P1：翻译后再次刷新段落映射——en-source 现在拿到 text_translated，
             # 段落级 text_translated 才会填充。zh-source 跳过 translate 块，
@@ -324,7 +324,7 @@ class AudioProcessPipeline:
             chapters,
             summaries,
             transcript,
-            progress_cb=lambda p: self._update_stage_progress_sync(stages, "highlight", p, episode_id, sync_stages),
+            progress_cb=self._make_db_progress_cb(stages, "highlight", episode_id),
         )
         self._checkpoint_json(episode_id, "highlight.json", highlight.model_dump())
         await self._complete_stage(stages, "highlight", completed_stages, sync_stages)
@@ -335,7 +335,7 @@ class AudioProcessPipeline:
         product_insights = await run_product_insights_stage(
             episode_id,
             self.data_dir,
-            progress_cb=lambda p: self._update_stage_progress_sync(stages, "product_insights", p, episode_id, sync_stages),
+            progress_cb=self._make_db_progress_cb(stages, "product_insights", episode_id),
         )
         await self._complete_stage(stages, "product_insights", completed_stages, sync_stages)
 
@@ -380,6 +380,9 @@ class AudioProcessPipeline:
             "status": status.value,
             "progress": 0.0,
             "started_at": datetime.now().isoformat(),
+            # 计数明细（如润色 "440/4045 段"）；阶段开始时未知，回调按需填充
+            "current": None,
+            "total": None,
         })
         await sync_fn()
 
@@ -397,13 +400,33 @@ class AudioProcessPipeline:
                 s["progress"] = progress
                 break
 
-    async def _update_stage_progress_sync(
-        self, stages: list, stage_id: str, progress: float,
-        episode_id: str, sync_fn
-    ):
-        """更新阶段进度并同步到数据库"""
-        self._update_stage_progress(stages, stage_id, progress)
-        await sync_fn()
+    def _make_db_progress_cb(self, stages: list, stage_id: str, episode_id: str):
+        """构建同步进度回调:更新内存阶段进度,并 fire-and-forget 写库。
+
+        LLM/字幕阶段的 progress_cb 是**同步**可调用对象(各 LLM 函数以
+        `progress_cb(p)` 调用,不 await),但写库是 async(aiosqlite)。若写成
+        `lambda p: async_fn(...)` 会返回一个永不 await 的协程——这正是之前
+        stages_json 进度长期卡在 0.0 的根因(参见 download_progress 的同类
+        注释)。这里用 asyncio.create_task 把写库协程调度到事件循环,与
+        download_progress 行为一致。
+
+        可选 current/total 让回调携带 "440/4045" 式计数,供前端展示明细。
+        """
+        def cb(progress: float, current: Optional[int] = None, total: Optional[int] = None):
+            for s in stages:
+                if s["id"] == stage_id:
+                    s["progress"] = progress
+                    if current is not None:
+                        s["current"] = current
+                    if total is not None:
+                        s["total"] = total
+                    break
+            asyncio.create_task(IngestJobRepository.update_stages(
+                episode_id,
+                [self._format_stage(s) for s in stages],
+                stages[-1]["id"] if stages else "pending",
+            ))
+        return cb
 
     async def _try_fetch_subtitles(self, raw_input: str, episode_id: str) -> Optional[Transcript]:
         """
@@ -595,6 +618,8 @@ class AudioProcessPipeline:
             "started_at": stage.get("started_at"),
             "completed_at": stage.get("completed_at"),
             "error": stage.get("error"),
+            "current": stage.get("current"),
+            "total": stage.get("total"),
         }
 
     async def cancel(self, episode_id: str) -> bool:
@@ -830,7 +855,7 @@ class AudioProcessPipeline:
 
             chapters = await split_into_chapters(
                 transcript,
-                progress_cb=lambda p: self._update_stage_progress_sync(stages, "chapterize", p, episode_id, sync_stages),
+                progress_cb=self._make_db_progress_cb(stages, "chapterize", episode_id),
             )
             await self._complete_stage(stages, "chapterize", completed_stages, sync_stages)
         else:
@@ -842,7 +867,7 @@ class AudioProcessPipeline:
 
             summaries = await generate_chapter_summaries(
                 chapters, transcript,
-                progress_cb=lambda p: self._update_stage_progress_sync(stages, "summarize", p, episode_id, sync_stages),
+                progress_cb=self._make_db_progress_cb(stages, "summarize", episode_id),
             )
             await self._complete_stage(stages, "summarize", completed_stages, sync_stages)
         else:
@@ -854,7 +879,7 @@ class AudioProcessPipeline:
             await self._add_stage(stages, "translate", EpisodeStatus.LLM_RUNNING, sync_stages)
             await SubtitleProcessor().translate(
                 transcript,
-                progress_cb=lambda p: self._update_stage_progress_sync(stages, "translate", p, episode_id, sync_stages),
+                progress_cb=self._make_db_progress_cb(stages, "translate", episode_id),
             )
             # P1：翻译后刷新段落映射（与 _process_internal 对齐），
             # 让 en-source 段落的 text_translated 反映翻译结果。
@@ -880,7 +905,7 @@ class AudioProcessPipeline:
                 chapters,
                 summaries,
                 transcript,
-                progress_cb=lambda p: self._update_stage_progress_sync(stages, "highlight", p, episode_id, sync_stages),
+                progress_cb=self._make_db_progress_cb(stages, "highlight", episode_id),
             )
             await self._complete_stage(stages, "highlight", completed_stages, sync_stages)
         else:

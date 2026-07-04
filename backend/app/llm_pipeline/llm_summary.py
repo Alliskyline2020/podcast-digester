@@ -97,9 +97,9 @@ async def generate_chapter_summaries(
         async with semaphore:
             result = await generate_chapter_summary(chapter, transcript)
             if progress_cb:
-                # 更新进度
+                # 更新进度，附带计数（completed/total 章），供前端展示 "12/48 章"
                 completed = chapters.index(chapter) + 1
-                progress_cb(completed / len(chapters))
+                progress_cb(completed / len(chapters), completed, len(chapters))
             return result
 
     # 为每个章节添加索引

@@ -136,13 +136,29 @@
               </div>
               <span class="progress-percent">{{ Math.round(ep.overall_progress * 100) }}%</span>
             </div>
-            <div class="stage-current">
-              <span class="stage-current-label">
-                {{ currentStageName(ep) ? `正在${currentStageName(ep)}` : statusText(ep.status) }}
-              </span>
-              <span v-if="currentStagePercent(ep) !== null" class="stage-current-percent">{{ currentStagePercent(ep) }}%</span>
-              <span v-else class="stage-current-indeterminate">进行中…</span>
-            </div>
+            <!-- 全阶段列表：每阶段的状态/百分比/计数 -->
+            <ul class="stage-list">
+              <li
+                v-for="row in stageRows(ep)"
+                :key="row.id"
+                :class="['stage-row', `stage-row--${row.state}`]"
+              >
+                <span class="stage-row__glyph">
+                  <span v-if="row.state === 'done'">✓</span>
+                  <span v-else-if="row.state === 'active'" class="stage-row__pulse"></span>
+                  <span v-else>○</span>
+                </span>
+                <span class="stage-row__name">{{ row.name }}</span>
+                <span class="stage-row__detail">
+                  <template v-if="row.state === 'active'">
+                    <span v-if="row.current != null && row.total != null" class="stage-row__count">{{ row.current }}/{{ row.total }}</span>
+                    <span v-if="row.progress > 0 && row.progress < 1" class="stage-row__pct">{{ Math.round(row.progress * 100) }}%</span>
+                    <span v-else-if="row.current == null || row.total == null" class="stage-row__live">进行中…</span>
+                  </template>
+                  <span v-else-if="row.state === 'done'" class="stage-row__done">完成</span>
+                </span>
+              </li>
+            </ul>
           </div>
 
           <!-- 完成状态 -->
@@ -245,6 +261,7 @@ import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import * as api from '@/api'
 import { validatePodcastInput } from '@/utils/validation'
+import { stageRows } from '@/utils/stageProgress'
 import EpisodeTags from '@/components/EpisodeTags.vue'
 
 const router = useRouter()
@@ -325,19 +342,6 @@ const episodeToCancel = ref(null)
 // 正在恢复的 episode id（用于按钮 loading 态 + 防重复点击）
 const resumingId = ref(null)
 
-// 状态文本映射
-const statusText = (status) => {
-  const texts = {
-    pending: '等待中',
-    downloading: '下载中',
-    asr_running: '转录中',
-    llm_running: '分析中',
-    ready: '完成',
-    failed: '失败',
-  }
-  return texts[status] || status
-}
-
 const verdictText = (verdict) => {
   const texts = {
     deep_listen: '🎧 深度聆听',
@@ -345,25 +349,6 @@ const verdictText = (verdict) => {
     skip: '⏭️ 可跳过',
   }
   return texts[verdict] || verdict
-}
-
-// 当前阶段的中文名（从 ep.stages 里按 current_stage 查）
-const currentStageName = (ep) => {
-  if (!ep.stages || !ep.current_stage) return ''
-  const stage = ep.stages.find(s => s.id === ep.current_stage)
-  return stage?.name || ''
-}
-
-// 当前阶段的内部进度百分比（0-100）。
-// 仅在 progress 严格位于 (0, 1) 时返回数字：
-//   - 0：阶段刚启动、后端尚未上报中间进度（如 ASR 不上报），显示 indeterminate
-//   - 1：阶段即将切到下一个，显示 indeterminate 避免百分比闪烁
-const currentStagePercent = (ep) => {
-  if (!ep.stages || !ep.current_stage) return null
-  const stage = ep.stages.find(s => s.id === ep.current_stage)
-  if (!stage) return null
-  if (stage.progress > 0 && stage.progress < 1) return Math.round(stage.progress * 100)
-  return null
 }
 
 const isProcessing = (status) => {
@@ -1041,42 +1026,88 @@ onUnmounted(() => {
   min-width: 40px;
 }
 
-/* 当前阶段：文字 + 阶段内百分比 */
-.stage-current {
+/* 全阶段列表：每行 glyph + 名称 + 进度/计数 */
+.stage-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
   display: flex;
-  align-items: baseline;
-  gap: 8px;
-  font-size: 13px;
+  flex-direction: column;
+  gap: 6px;
 }
 
-.stage-current-label {
+.stage-row {
+  display: grid;
+  grid-template-columns: 16px 1fr auto;
+  align-items: center;
+  column-gap: 8px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.stage-row__glyph {
+  display: inline-flex;
+  justify-content: center;
+  font-size: 12px;
+}
+
+.stage-row__name {
+  color: #6b7280;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stage-row__detail {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 已完成 */
+.stage-row--done .stage-row__glyph {
+  color: #10b981;
+}
+.stage-row--done .stage-row__name {
+  color: #9ca3af;
+}
+.stage-row__done {
+  color: #9ca3af;
+  font-size: 11px;
+}
+
+/* 进行中：强调色 + 脉冲点 */
+.stage-row--active .stage-row__name {
   color: #4f8ef7;
   font-weight: 600;
 }
-
-.stage-current-percent {
+.stage-row__count {
   color: #4f8ef7;
-  font-variant-numeric: tabular-nums;
-  font-weight: 500;
+  font-weight: 600;
+  font-size: 11px;
 }
-
-/* indeterminate：后端尚未上报阶段内进度（如本地 ASR） */
-.stage-current-indeterminate {
+.stage-row__pct {
+  color: #6366f1;
+  font-size: 11px;
+}
+.stage-row__live {
   color: #9ca3af;
-  font-size: 12px;
-  position: relative;
+  font-size: 11px;
+}
+.stage-row__pulse {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #4f8ef7;
+  animation: indeterminate-blink 1.2s infinite;
 }
 
-.stage-current-indeterminate::after {
-  content: '';
-  display: inline-block;
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: #9ca3af;
-  margin-left: 4px;
-  vertical-align: middle;
-  animation: indeterminate-blink 1.2s infinite;
+/* 未开始：置灰 */
+.stage-row--todo .stage-row__glyph,
+.stage-row--todo .stage-row__name {
+  color: #cbd5e1;
 }
 
 @keyframes indeterminate-blink {

@@ -86,7 +86,7 @@ async def run_llm_pipeline(
     summaries = await generate_chapter_summaries(
         chapters,
         transcript,
-        progress_cb=lambda p: update_progress("summarize", p),
+        progress_cb=lambda p, c=None, t=None: update_progress("summarize", p),
     )
 
     # 保存 summaries

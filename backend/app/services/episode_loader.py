@@ -174,6 +174,8 @@ async def load_progress_fast(episode_id: str) -> Optional[dict]:
             "name": STAGE_NAMES.get(stage_id, stage_id),
             "status": stage_status,
             "progress": progress,
+            "current": stage.get("current"),
+            "total": stage.get("total"),
         })
 
     return {

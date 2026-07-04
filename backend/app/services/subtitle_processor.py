@@ -70,7 +70,7 @@ class SubtitleProcessor:
         assert cur == snapshot, "不可变性违反: id/start_ms/end_ms/text_original 被改动"
 
     # ---------- 润色 ----------
-    async def polish(self, transcript, progress_cb: Optional[Callable[[float], None]] = None) -> int:
+    async def polish(self, transcript, progress_cb: Optional[Callable] = None) -> int:
         """润色所有 segment 的 text_with_punct(双语)。返回实际接受的句数。
 
         每个 text_original 非空的 segment, 处理后 text_with_punct 必非空:
@@ -113,7 +113,8 @@ class SubtitleProcessor:
             polished += accepted
             logger.info(f"[polish] 批 {start}-{start+len(batch)}/{total}: 接受 {accepted}/{len(inputs)}")
             if progress_cb:
-                progress_cb((start + len(batch)) / total)
+                # 附带计数（已处理段/总段），供前端展示 "440/4045 段"
+                progress_cb((start + len(batch)) / total, start + len(batch), total)
         return polished
 
     # ---------- 翻译(EN→ZH) ----------

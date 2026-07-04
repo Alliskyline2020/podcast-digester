@@ -121,6 +121,8 @@ class IngestStage(BaseModel):
     name: str = Field(..., description="阶段名称")
     status: EpisodeStatus = Field(..., description="阶段状态")
     progress: float = Field(default=0.0, ge=0, le=1, description="进度 0-1")
+    current: Optional[int] = Field(None, description="已处理量(如已润色段数)")
+    total: Optional[int] = Field(None, description="总量(如总段数)")
     error: Optional[str] = Field(None, description="错误信息")
     started_at: Optional[datetime] = Field(None, description="开始时间")
     completed_at: Optional[datetime] = Field(None, description="完成时间")
@@ -349,9 +351,12 @@ class EpisodeBundle(BaseModel):
 
 class StageInfo(BaseModel):
     """阶段信息"""
-    name: str = Field(..., description="阶段名称")
+    id: str = Field(..., description="阶段 ID（download/transcribe/.../highlight）")
+    name: str = Field(..., description="阶段名称（中文）")
     status: EpisodeStatus = Field(..., description="阶段状态")
     progress: float = Field(default=0.0, ge=0, le=1, description="进度 0-1")
+    current: Optional[int] = Field(None, description="已处理量(如已润色段数)")
+    total: Optional[int] = Field(None, description="总量(如总段数)")
 
 
 class EpisodeCard(BaseModel):
