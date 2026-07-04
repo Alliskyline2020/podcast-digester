@@ -87,6 +87,13 @@ data/*.db
 data/*.db-journal
 data/*.db-wal
 data/*.db-shm
+# 备份与一次性快照（DB/媒体副本/迁移产物，非应用数据）
+data/media.backup-*/
+data/*_backup/
+data/*.db.bak*
+data/*.db.backup-*
+data/*snapshot*.json
+data/*dryrun*.json
 # backend/data/ 是 cwd=backend 时误生成的副本目录，应用实际用 ../data
 backend/data/
 
@@ -115,3 +122,10 @@ backend/app/speech_analyzer_bridge/.swiftpm/
 backend/cookies.txt
 *.cookies
 cookies.txt
+
+# 一次性运维 / 修复脚本（episode 专属，非生产代码，留磁盘但不入库）
+backend/reprocess_*.py
+backend/rerun_*.py
+backend/repair_*.py
+backend/fill_punct_fallback.py
+backend/import_orphan_episodes.py
