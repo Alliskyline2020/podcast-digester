@@ -652,7 +652,7 @@ class AudioProcessPipeline:
         Returns:
             dict: {'transcript': Transcript|None, 'chapters': list|None, 'summaries': list|None}
         """
-        from .models import Transcript, OutlineEntry, ChapterSummary
+        from .models import Transcript
         from .utils.io import load_json_with_callback
         import json
 
@@ -672,19 +672,27 @@ class AudioProcessPipeline:
         if outline_file.exists():
             with open(outline_file, 'r', encoding='utf-8') as f:
                 outline_data = json.load(f)
-                # 容错：历史上 outline.json 可能在 chapterize 检查点之后、
-                # summarize 注入 index 之前崩溃时缺少 index 字段——补上位置序号，
-                # 避免 OutlineEntry 校验失败阻塞 resume。
+                # 容错：outline.json 的 entries 可能——
+                #   (a) 缺 index：早期 chapterize 检查点之后、index 注入之前崩溃的残留；
+                #   (b) 含 index：split_into_chapters (ee5194f) 在检查点前注入后的正常产物。
+                # 在 dict 层合并（e 的 index 覆盖位置 i，缺则回退 i），返回 list[dict]，
+                # 与 _process_internal 中 split_into_chapters 的返回类型一致——下游
+                # save_episode_bundle / generate_chapter_summaries / extract_highlights 都按
+                # dict 序列消费。早期实现构造 OutlineEntry 实例会触发
+                # "Object of type OutlineEntry is not JSON serializable"（save_episode_bundle）。
                 entries = outline_data.get('entries', [])
                 results['chapters'] = [
-                    OutlineEntry(**{'index': i}, **e) for i, e in enumerate(entries)
+                    {**{'index': i}, **e} for i, e in enumerate(entries)
                 ]
 
-        # 加载 summaries
+        # 加载 summaries —— 返回 list[dict]，与 generate_chapter_summaries 的返回类型及
+        # save_episode_bundle 的契约对齐（summaries 直接写盘，必须是原生 dict 序列）。
+        # 早期实现构造 ChapterSummary 实例会触发
+        # "Object of type ChapterSummary is not JSON serializable"（save_episode_bundle）。
         summaries_file = media_dir / "summaries.json"
         if summaries_file.exists():
             def prepare_summaries(data):
-                return [ChapterSummary(**s) for s in data]
+                return [s if isinstance(s, dict) else dict(s) for s in data]
             results['summaries'] = load_json_with_callback(summaries_file, prepare_summaries)
 
         return results
