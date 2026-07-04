@@ -100,6 +100,12 @@ async def split_into_chapters(
 
         logger.info(f"Chapter split completed: {len(chapters)} chapters")
 
+        # Inject positional index here (not later in summarize) so the
+        # outline.json checkpoint written by the caller is safe to resume
+        # from — OutlineEntry requires `index`.
+        for i, ch in enumerate(chapters):
+            ch["index"] = i
+
         if progress_cb:
             progress_cb(1.0)
 
@@ -184,6 +190,10 @@ async def _split_with_windowing(
     merged_chapters = _merge_adjacent_chapters(all_chapters)
 
     logger.info(f"Window merge completed: {len(merged_chapters)} chapters")
+
+    # Inject positional index (see single-process path above for rationale).
+    for i, ch in enumerate(merged_chapters):
+        ch["index"] = i
 
     if progress_cb:
         progress_cb(1.0)

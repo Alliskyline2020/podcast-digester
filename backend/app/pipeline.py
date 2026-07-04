@@ -647,7 +647,13 @@ class AudioProcessPipeline:
         if outline_file.exists():
             with open(outline_file, 'r', encoding='utf-8') as f:
                 outline_data = json.load(f)
-                results['chapters'] = [OutlineEntry(**e) for e in outline_data.get('entries', [])]
+                # 容错：历史上 outline.json 可能在 chapterize 检查点之后、
+                # summarize 注入 index 之前崩溃时缺少 index 字段——补上位置序号，
+                # 避免 OutlineEntry 校验失败阻塞 resume。
+                entries = outline_data.get('entries', [])
+                results['chapters'] = [
+                    OutlineEntry(**{'index': i}, **e) for i, e in enumerate(entries)
+                ]
 
         # 加载 summaries
         summaries_file = media_dir / "summaries.json"
