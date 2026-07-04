@@ -195,3 +195,104 @@ async def test_summarize_emits_chapter_counts(monkeypatch):
     assert all(c[2] == 4 for c in calls), "total must be chapter count"
     # completed covers every chapter exactly once (order is concurrent)
     assert sorted(c[1] for c in calls) == [1, 2, 3, 4]
+
+
+# ===== load_progress_fast: overall_progress must be monotonic & correct =====
+#
+# Regression (systematic-debugging): load_progress_fast decided a stage was
+# "completed" via `progress >= 1.0`. But progress is written fire-and-forget
+# through asyncio.create_task (pipeline._make_db_progress_cb), so a stale
+# overwrite can momentarily leave a *completed* stage's progress != 1.0.
+# That stage's weight then got dropped entirely → overall_progress regressed
+# (user-visible as "progress % resets to 0 after a step finishes").
+#
+# Fix: delegate overall to `calculate_overall_progress` — POSITION-based
+# (current stage + everything before it = full weight), monotonic regardless
+# of transient progress-field values. Also drops the divergent local
+# STAGE_WEIGHTS copy (which omitted product_insights → premature 100%).
+
+from app.services.episode_loader import load_progress_fast  # noqa: E402
+
+
+def _patch_ingest_job(monkeypatch, job_data):
+    async def fake_get(episode_id):
+        return job_data
+    monkeypatch.setattr(
+        "app.services.episode_loader.IngestJobRepository.get_by_id",
+        staticmethod(fake_get),
+    )
+
+
+@pytest.mark.unit
+async def test_load_progress_monotonic_when_completed_stage_progress_stale(
+    monkeypatch, temp_data_dir
+):
+    """transcribe is done but its progress field reads 0.0 (stale overwrite);
+    chapterize is current at 30%. overall must still count transcribe's weight
+    (position-based), not drop it and regress."""
+    _patch_ingest_job(
+        monkeypatch,
+        {
+            "current_stage": "chapterize",
+            "stages": [
+                {"name": "download", "status": "downloading", "progress": 1.0},
+                {"name": "transcribe", "status": "asr_running", "progress": 0.0},
+                {"name": "chapterize", "status": "llm_running", "progress": 0.3},
+            ],
+        },
+    )
+
+    result = await load_progress_fast("ep_1")
+
+    # download(20) + transcribe(20) + chapterize(10)*0.3 = 43%
+    assert result["overall_progress"] == pytest.approx(0.43, abs=0.01)
+
+
+@pytest.mark.unit
+async def test_load_progress_product_insights_not_premature_full(
+    monkeypatch, temp_data_dir
+):
+    """product_insights current at 50%. Local STAGE_WEIGHTS used to omit it,
+    so overall hit 100% the moment highlight finished. Must now reflect the
+    remaining 15%."""
+    _patch_ingest_job(
+        monkeypatch,
+        {
+            "current_stage": "product_insights",
+            "stages": [
+                {"name": "download", "progress": 1.0},
+                {"name": "transcribe", "progress": 1.0},
+                {"name": "chapterize", "progress": 1.0},
+                {"name": "summarize", "progress": 1.0},
+                {"name": "highlight", "progress": 1.0},
+                {"name": "product_insights", "progress": 0.5},
+            ],
+        },
+    )
+
+    result = await load_progress_fast("ep_1")
+
+    # 85 (all prior, translate=0) + 15*0.5 = 92.5% — not 100%
+    assert result["overall_progress"] == pytest.approx(0.925, abs=0.01)
+
+
+@pytest.mark.unit
+async def test_load_progress_done_is_full(monkeypatch, temp_data_dir):
+    """current_stage == done → overall 100%."""
+    _patch_ingest_job(
+        monkeypatch,
+        {
+            "current_stage": "done",
+            "stages": [
+                {"name": n, "progress": 1.0}
+                for n in (
+                    "download", "transcribe", "chapterize",
+                    "summarize", "highlight", "product_insights", "done",
+                )
+            ],
+        },
+    )
+
+    result = await load_progress_fast("ep_1")
+
+    assert result["overall_progress"] == pytest.approx(1.0)

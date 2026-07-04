@@ -129,59 +129,45 @@ async def load_progress_fast(episode_id: str) -> Optional[dict]:
     if not job_data:
         return None
 
-    # 阶段权重配置（与 pipeline.py 保持一致）
-    STAGE_WEIGHTS = {
-        "download": 25,
-        "transcribe": 25,
-        "chapterize": 12,
-        "summarize": 20,
-        "highlight": 18,
-        "translate": 0,  # 可选阶段，不计入总进度
-    }
-    TOTAL_WEIGHT = 100
+    # overall 进度委托给 calculate_overall_progress（基于 stage 在 stage_order 里的
+    # **位置**：current 及其之前一律满权重）。单调递增，不依赖 progress 字段的
+    # 瞬时精确值——pipeline 的进度回调是 fire-and-forget (asyncio.create_task)，
+    # stale 覆盖会让已完成阶段的 progress 短暂偏离 1.0；若像旧实现那样用
+    # `progress >= 1.0` 判定完成，会丢掉整段权重、让 overall 回退（用户可见的
+    # "步骤完成后进度归零"）。权重表也统一用 config 的权威定义（含 product_insights）。
+    from app.config import STAGE_NAMES, STAGE_ORDER, calculate_overall_progress
 
-    STAGE_NAMES = {
-        "download": "下载",
-        "transcribe": "转录",
-        "chapterize": "分章",
-        "summarize": "摘要",
-        "highlight": "亮点",
-        "translate": "翻译",
-        "done": "完成",
-    }
-
-    stages_data = []
-    total_progress = 0.0
     current_stage_id = job_data.get("current_stage", "")
+    current_stage_progress = 0.0
+    stages_data = []
 
     for stage in job_data.get("stages", []):
         stage_id = stage.get("name", stage.get("id", ""))
-        progress = stage.get("progress", 0.0)
-        stage_status = stage.get("status", "")
-
         if not stage_id:
             continue
-
-        if stage_id in STAGE_WEIGHTS:
-            weight = STAGE_WEIGHTS[stage_id]
-            if progress >= 1.0:
-                total_progress += weight
-            elif stage_id == current_stage_id:
-                total_progress += weight * progress
-
+        progress = stage.get("progress", 0.0)
+        if stage_id == current_stage_id:
+            current_stage_progress = progress
         stages_data.append({
             "id": stage_id,
             "name": STAGE_NAMES.get(stage_id, stage_id),
-            "status": stage_status,
+            "status": stage.get("status", ""),
             "progress": progress,
             "current": stage.get("current"),
             "total": stage.get("total"),
         })
 
+    if current_stage_id == "done":
+        overall = 1.0
+    elif current_stage_id in STAGE_ORDER:
+        overall = calculate_overall_progress(current_stage_id, current_stage_progress)
+    else:
+        overall = 0.0
+
     return {
         "current_stage": current_stage_id,
         "stages": stages_data,
-        "overall_progress": min(total_progress / TOTAL_WEIGHT, 1.0),
+        "overall_progress": min(overall, 1.0),
     }
 
 
