@@ -21,6 +21,50 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+# CJK 检测：翻译结果里一个中文字符都没有 = LLM 原样回显英文（合并组 follower 的签名）
+import re as _re
+_CJK_RE = _re.compile(r"[一-鿿㐀-䶿]")
+
+
+def _has_cjk(text: str) -> bool:
+    """文本是否含至少一个中日韩表意字符。"""
+    return bool(_CJK_RE.search(text or ""))
+
+
+def _merge_group_ids(segments, translations_by_id) -> set:
+    """识别需要按 1:1 重译的合并组 id 集合。
+
+    背景：ASR 常把一句话切成多段分片。LLM 批量翻译时会把若干连续分片合并成
+    一句完整中文、写到首段(leader)，其余 follower 段原样回显英文。结果是
+    leader 拿到整句中文、follower 的 text_translated 是英文，前端拼出
+    "中文完整句 + 英文残尾"。
+
+    本函数找出每个"回显 follower + 其前导 leader"，返回它们全体的 id ——
+    对这批 id 逐段独立重译(1:1)，leader 拿回自己分片的中文，follower 也有了自己的中文。
+
+    - 回显段：翻译非空但不含任何 CJK 字符（纯英文回显）。
+    - 缺失段（无翻译）：不算回显，仍交给现有 fill pass 处理。
+    - leader：回显段往前、跳过连续回显后遇到的第一个非回显段。
+    """
+    n = len(segments)
+    is_echo = []
+    for seg in segments:
+        t = (translations_by_id.get(seg.id) or "")
+        is_echo.append(bool(t.strip()) and not _has_cjk(t))
+    needs: set = set()
+    for i in range(n):
+        if not is_echo[i]:
+            continue
+        needs.add(segments[i].id)
+        j = i - 1
+        while j >= 0 and is_echo[j]:
+            needs.add(segments[j].id)
+            j -= 1
+        if j >= 0:
+            needs.add(segments[j].id)  # leader
+    return needs
+
+
 # 科技数码/播客专用术语词典
 TECH_TERMS_DICTIONARY = """
 常用术语翻译参考：
@@ -171,6 +215,33 @@ async def translate_segments(
             f"[fill] 最终覆盖率 {covered}/{len(all_ids)} ({covered / len(all_ids):.2%})，"
             f"仍缺 {len(miss_ids)} 个{(' id=' + str(miss_ids[:20])) if miss_ids else ''}"
         )
+
+    # === 合并组修复 pass ===
+    # ASR 常把一句话切成多段分片。LLM 批量翻译时会把连续分片合并成一句完整中文、
+    # 写到首段(leader)，其余 follower 原样回显英文（"中文完整句 + 英文残尾"的根因）。
+    # 现有 fill 只补"缺失 id"，识别不了"存在但回显英文"的段。这里把每个合并组
+    # (回显 follower + 其 leader) 逐段独立重译(batch=1，无跨段上下文 → LLM 无法再合并)，
+    # 让每段都拿到与自身英文/时间戳对齐的中文。
+    by_id = {t.get("id"): (t.get("text_zh") or "") for t in translations if t.get("id") is not None}
+    needs_ids = _merge_group_ids(segments, by_id)
+    if needs_ids:
+        need_segs = [s for s in segments if s.id in needs_ids]
+        logger.info(f"[merge-repair] 检出 {len(need_segs)} 段合并组(回显+leader)，逐段 1:1 重译")
+        repair = await asyncio.gather(*[
+            translate_batch([s], idx, skip_progress=True)
+            for idx, s in enumerate(need_segs)
+        ])
+        repaired_map = {
+            r.get("id"): r
+            for batch_r in repair
+            for r in batch_r
+            if r.get("id") is not None
+        }
+        if repaired_map:
+            # 重译成功的 id：用新结果替换旧翻译；失败的 id 保留旧翻译(不丢段)
+            translations = [t for t in translations if t.get("id") not in repaired_map]
+            translations.extend(repaired_map.values())
+            logger.info(f"[merge-repair] 重译 {len(repaired_map)} 段")
 
     logger.info(f"Translation completed: {len(translations)} segments")
 
