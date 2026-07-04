@@ -131,6 +131,7 @@
           <!-- 处理中状态 - 详细进度显示 -->
           <div v-if="isProcessing(ep.status)" class="processing-info">
             <div class="progress-container">
+              <span class="progress-leading" aria-hidden="true"></span>
               <div class="progress-bar">
                 <div class="progress-fill" :style="{ width: `${ep.overall_progress * 100}%` }"></div>
               </div>
@@ -999,14 +1000,24 @@ onUnmounted(() => {
   gap: 12px;
 }
 
+/* 与 .stage-row 同构的网格（16px 1fr auto + 8px gap）：
+   进度条左右边缘严格对齐 stage 行的名称列、% 对齐 detail 列。
+   progress-leading 占位对齐 glyph 列，消除"进度条比 stage 行短一截/
+   错位"的视觉问题（用户反馈"进行中的位置比进度条更靠边界"）。 */
 .progress-container {
-  display: flex;
+  display: grid;
+  grid-template-columns: 16px 1fr auto;
   align-items: center;
-  gap: 10px;
+  column-gap: 8px;
+}
+
+.progress-leading {
+  width: 16px;
+  height: 6px;
 }
 
 .progress-bar {
-  flex: 1;
+  width: 100%;
   height: 6px;
   background: #e5e7eb;
   border-radius: 3px;
