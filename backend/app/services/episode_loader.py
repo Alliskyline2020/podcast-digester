@@ -271,7 +271,8 @@ async def load_episode_bundle(episode_id: str) -> EpisodeBundle:
             except Exception as e:
                 logger.debug(f"[Load Bundle] transcript file load failed: {e}")
 
-    # 加载 outline - 从数据库读取，失败时回退到文件系统
+    # 加载 outline - 优先数据库；DB 空或异常都回退到磁盘 checkpoint
+    # (文件在 status=ready 之前已原子落盘, 是派生数据的权威来源)
     outline = None
     try:
         outline_data = await OutlineRepository.get(episode_id)
@@ -285,7 +286,9 @@ async def load_episode_bundle(episode_id: str) -> EpisodeBundle:
             outline_data["entries"] = [OutlineEntry(**e) for e in entries_list]
             outline = Outline(**outline_data)
     except Exception as e:
-        logger.debug(f"[Load Bundle] outline DB load failed, trying filesystem: {e}")
+        logger.debug(f"[Load Bundle] outline DB load raised, trying filesystem: {e}")
+
+    if outline is None:
         outline_file = deps.data_dir / "media" / episode_id / "outline.json"
         if outline_file.exists():
             def prepare_outline(data):
@@ -294,7 +297,7 @@ async def load_episode_bundle(episode_id: str) -> EpisodeBundle:
                 return Outline(**data)
             outline = load_json_with_callback(outline_file, prepare_outline)
 
-    # 加载章节摘要 - 从数据库读取，失败时回退到文件系统
+    # 加载章节摘要 - 优先数据库；DB 空或异常都回退到磁盘 checkpoint
     summaries = []
     try:
         summaries_data = await SummariesRepository.get(episode_id)
@@ -302,14 +305,16 @@ async def load_episode_bundle(episode_id: str) -> EpisodeBundle:
             summaries_list = json.loads(summaries_data["summaries_json"])
             summaries = [ChapterSummary(**s) for s in summaries_list]
     except Exception as e:
-        logger.debug(f"[Load Bundle] summaries DB load failed, trying filesystem: {e}")
+        logger.debug(f"[Load Bundle] summaries DB load raised, trying filesystem: {e}")
+
+    if not summaries:
         summaries_file = deps.data_dir / "media" / episode_id / "summaries.json"
         if summaries_file.exists():
             def prepare_summaries(data):
                 return [ChapterSummary(**s) for s in data]
             summaries = load_json_with_callback(summaries_file, prepare_summaries) or []
 
-    # 加载 highlight - 从数据库读取，失败时回退到文件系统
+    # 加载 highlight - 优先数据库；DB 空或异常都回退到磁盘 checkpoint
     highlight = None
     try:
         from pydantic import ValidationError as PydanticValidationError
@@ -346,7 +351,9 @@ async def load_episode_bundle(episode_id: str) -> EpisodeBundle:
             except PydanticValidationError as ve:
                 raise
     except Exception as e:
-        logger.debug(f"[Load Bundle] highlight DB load failed, trying filesystem: {e}")
+        logger.debug(f"[Load Bundle] highlight DB load raised, trying filesystem: {e}")
+
+    if highlight is None:
         highlight_file = deps.data_dir / "media" / episode_id / "highlight.json"
         if highlight_file.exists():
             def prepare_highlight(data):
@@ -370,7 +377,7 @@ async def load_episode_bundle(episode_id: str) -> EpisodeBundle:
             if highlight_raw:
                 highlight = HighlightCard(**highlight_raw)
 
-    # 加载 product_insights - 从数据库读取，失败时回退到文件系统
+    # 加载 product_insights - 优先数据库；DB 空或异常都回退到磁盘 checkpoint
     product_insights = None
     try:
         insights_data = await ProductInsightsRepository.get(episode_id)
@@ -378,7 +385,9 @@ async def load_episode_bundle(episode_id: str) -> EpisodeBundle:
             insights_dict = json.loads(insights_data["insights_json"])
             product_insights = ProductInsights(**insights_dict)
     except Exception as e:
-        logger.debug(f"[Load Bundle] product_insights DB load failed, trying filesystem: {e}")
+        logger.debug(f"[Load Bundle] product_insights DB load raised, trying filesystem: {e}")
+
+    if product_insights is None:
         insights_file = deps.data_dir / "media" / episode_id / "product_insights.json"
         if insights_file.exists():
             product_insights = load_json_with_callback(insights_file, lambda d: ProductInsights(**d))
