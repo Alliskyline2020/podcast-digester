@@ -115,3 +115,77 @@ async def test_translate_fills_gaps_with_original(monkeypatch):
     assert n == 1
     assert t.segments[0].text_translated == "这是中文0"
     assert t.segments[1].text_translated == "english one"  # 原文兜底, 非空
+
+
+# ---------- polish 跳过: 已有标点的 manual CC ----------
+
+def _en_cc_segs(n=10):
+    """模拟 YouTube 英文 manual CC: 标点完整、句首大写。"""
+    samples = [
+        "The following is a conversation with Elon Musk about Neuralink.",
+        "He discussed the future of humanity, brain-computer interfaces, and AI.",
+        "Most people think that they're breathing oxygen, and they're actually not.",
+        "Unfortunately, you're gonna need it for the surgery tomorrow morning.",
+        "Even with only 10% of the electrodes working, we were able to decode intent.",
+        "We'll improve the signal processing, the decoding, and the whole chain.",
+        "Yeah, and we just, obviously, did our second implant as well, so far so good.",
+        "What do you need to add more for? I'm so over-caffeinated right now.",
+        "There's many more to come, and the results have been really encouraging.",
+        "The cone player logo is iconic; people search for it on Google directly.",
+    ]
+    return [_seg(i, samples[i % len(samples)]) for i in range(n)]
+
+
+@pytest.mark.asyncio
+async def test_polish_skips_already_punctuated_manual_cc(monkeypatch):
+    """英文 manual CC 已有完整标点 → polish 应整体跳过(不调 LLM)。
+
+    省下 ~26 分钟无意义 LLM 调用(11696 段 / batch=15 = ~780 批)。
+    """
+    calls = []
+    async def fake_chat_json(system, user, **kw):
+        calls.append(1)
+        return {"polished": []}
+    monkeypatch.setattr("app.services.subtitle_processor.chat_json", fake_chat_json)
+
+    progress = []
+    t = Transcript(episode_id="ep_test", language="en", segments=_en_cc_segs(10))
+    n = await SubtitleProcessor().polish(
+        t, progress_cb=lambda p, cur=None, total=None: progress.append((p, cur, total))
+    )
+
+    assert calls == []  # 关键: LLM 完全没被调用
+    assert n == 0
+    for s in t.segments:
+        assert s.text_with_punct == s.text_original  # 直接用原文, 未处理
+    assert progress and progress[-1][0] == 1.0  # 仍报完成
+
+
+@pytest.mark.asyncio
+async def test_polish_still_runs_for_unpunctuated_asr(monkeypatch):
+    """无标点 ASR → polish 正常调 LLM, 不被误跳。"""
+    calls = []
+    async def fake_chat_json(system, user, **kw):
+        calls.append(1)
+        return {"polished": []}
+    monkeypatch.setattr("app.services.subtitle_processor.chat_json", fake_chat_json)
+
+    t = _transcript("zh", [_seg(0, "我觉得这个浏览器很好用"),
+                           _seg(1, "然后我们就开始聊那个话题")])
+    await SubtitleProcessor().polish(t)
+    assert len(calls) >= 1  # LLM 被调用, 未误跳
+
+
+@pytest.mark.asyncio
+async def test_polish_skip_threshold_not_triggered_by_sparse_punct(monkeypatch):
+    """零星标点(单逗号)不应触发跳过——密度必须足够高。"""
+    calls = []
+    async def fake_chat_json(system, user, **kw):
+        calls.append(1)
+        return {"polished": []}
+    monkeypatch.setattr("app.services.subtitle_processor.chat_json", fake_chat_json)
+
+    # 每段只有一个逗号, 密度低 → 不跳过 → LLM 被调
+    t = _transcript("zh", [_seg(0, "你好,世界很长很长很长很长很长很长很长很长")])
+    await SubtitleProcessor().polish(t)
+    assert len(calls) >= 1
