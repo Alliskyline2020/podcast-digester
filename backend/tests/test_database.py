@@ -166,3 +166,41 @@ class TestIngestJobRepository:
         job = await IngestJobRepository.get_by_id(episode_id)
         assert job["current_stage"] == "downloading"
         assert len(job["stages"]) > 0
+
+
+@pytest.mark.unit
+class TestSyncDbBusyTimeout:
+    """同步连接必须设 busy_timeout —— 否则 async pipeline 收尾时
+    save_episode_bundle 与并发写冲突必 'database is locked'
+    (ep_1783264218536 全 pipeline 跑完却 rollback 的根因)。"""
+
+    def test_sync_db_sets_busy_timeout(self, tmp_path, monkeypatch):
+        import app.database
+        from app.database import _sync_db
+
+        monkeypatch.setattr(app.database, "DB_PATH", tmp_path / "t.db")
+        db = _sync_db()
+        try:
+            assert db.execute("PRAGMA busy_timeout").fetchone()[0] == 30000
+        finally:
+            db.close()
+
+    def test_update_status_sync_writes_without_lock(self, tmp_path, monkeypatch):
+        """端到端: update_status_sync 经 _sync_db() 写入, 不再 lock。"""
+        import app.database
+        from app.database import EpisodeRepositorySync, _sync_db
+
+        monkeypatch.setattr(app.database, "DB_PATH", tmp_path / "t.db")
+        # 建表 + 插一行
+        with _sync_db() as db:
+            db.execute(
+                "CREATE TABLE episode (id TEXT PRIMARY KEY, status TEXT, "
+                "error_msg TEXT, updated_at TEXT)"
+            )
+            db.execute("INSERT INTO episode (id, status) VALUES ('ep1', 'pending')")
+            db.commit()
+        # 收尾写 — 之前这里会 lock, 现在走 _sync_db (busy_timeout)
+        EpisodeRepositorySync.update_status_sync("ep1", "ready")
+        with _sync_db() as db:
+            row = db.execute("SELECT status FROM episode WHERE id='ep1'").fetchone()
+        assert row[0] == "ready"

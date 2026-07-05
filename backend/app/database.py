@@ -630,14 +630,29 @@ def _sync_connect():
     return aiosqlite.connect(DB_PATH)
 
 
+def _sync_db():
+    """真正的同步 sqlite 连接, 设 busy_timeout=30s。
+
+    之前 EpisodeRepositorySync/IngestJobRepositorySync 直接
+    sqlite3.connect(DB_PATH) —— 默认 timeout=5s 且无 busy_timeout PRAGMA。
+    在 async pipeline 收尾(save_episode_bundle 置 ready)时, 这个 sync 新连接
+    与 API 进程/async 进度回调的并发写冲突, 5s 内拿不到锁即抛 'database is
+    locked', 导致整集 rollback(所有 LLM 工作白费)。busy_timeout 让写者排队
+    等待 30s 而非立即失败。
+    """
+    import sqlite3
+    db = sqlite3.connect(DB_PATH, timeout=30.0)
+    db.execute("PRAGMA busy_timeout=30000")
+    return db
+
+
 class EpisodeRepositorySync:
     """Episode 同步数据访问（用于需要同步操作的上下文）"""
 
     @staticmethod
     def get_by_id_sync(episode_id: str) -> Optional[dict]:
         """同步获取节目"""
-        import sqlite3
-        with sqlite3.connect(DB_PATH) as db:
+        with _sync_db() as db:
             db.row_factory = sqlite3.Row
             cursor = db.execute(
                 "SELECT * FROM episode WHERE id = ?", (episode_id,)
@@ -648,8 +663,7 @@ class EpisodeRepositorySync:
     @staticmethod
     def update_status_sync(episode_id: str, status: str, error_msg: Optional[str] = None) -> None:
         """同步更新状态"""
-        import sqlite3
-        with sqlite3.connect(DB_PATH) as db:
+        with _sync_db() as db:
             now = datetime.now().isoformat()
             if error_msg:
                 db.execute("""
@@ -670,8 +684,7 @@ class IngestJobRepositorySync:
     @staticmethod
     def get_by_id_sync(episode_id: str) -> Optional[dict]:
         """同步获取任务"""
-        import sqlite3
-        with sqlite3.connect(DB_PATH) as db:
+        with _sync_db() as db:
             db.row_factory = sqlite3.Row
             cursor = db.execute(
                 "SELECT * FROM ingest_job WHERE episode_id = ?", (episode_id,)
