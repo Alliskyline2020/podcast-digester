@@ -128,38 +128,34 @@
             class="card-tags"
           />
 
-          <!-- 处理中状态 - 详细进度显示 -->
+          <!-- 处理中状态 - 紧凑三行：进度条 / 当前阶段 / 全阶段状态条 -->
           <div v-if="isProcessing(ep.status)" class="processing-info">
-            <div class="progress-container">
-              <span class="progress-leading" aria-hidden="true"></span>
-              <div class="progress-bar">
-                <div class="progress-fill" :style="{ width: `${ep.overall_progress * 100}%` }"></div>
+            <template v-for="summary in [stageSummary(ep)]" :key="ep.id">
+              <!-- 行1：总进度条 + % + N/M 步 -->
+              <div class="progress-row">
+                <div class="progress-bar">
+                  <div class="progress-fill" :style="{ width: `${ep.overall_progress * 100}%` }"></div>
+                </div>
+                <span class="progress-percent">{{ Math.round(ep.overall_progress * 100) }}%</span>
+                <span class="progress-step">{{ summary.step }}/{{ summary.total }} 步</span>
               </div>
-              <span class="progress-percent">{{ Math.round(ep.overall_progress * 100) }}%</span>
-            </div>
-            <!-- 全阶段列表：每阶段的状态/百分比/计数 -->
-            <ul class="stage-list">
-              <li
-                v-for="row in stageRows(ep)"
-                :key="row.id"
-                :class="['stage-row', `stage-row--${row.state}`]"
-              >
-                <span class="stage-row__glyph">
-                  <span v-if="row.state === 'done'">✓</span>
-                  <span v-else-if="row.state === 'active'" class="stage-row__pulse"></span>
-                  <span v-else>○</span>
-                </span>
-                <span class="stage-row__name">{{ row.name }}</span>
-                <span class="stage-row__detail">
-                  <template v-if="row.state === 'active'">
-                    <span v-if="row.current != null && row.total != null" class="stage-row__count">{{ row.current }}/{{ row.total }}</span>
-                    <span v-if="row.progress > 0 && row.progress < 1" class="stage-row__pct">{{ Math.round(row.progress * 100) }}%</span>
-                    <span v-else-if="row.current == null || row.total == null" class="stage-row__live">进行中…</span>
-                  </template>
-                  <span v-else-if="row.state === 'done'" class="stage-row__done">完成</span>
-                </span>
-              </li>
-            </ul>
+              <!-- 行2：当前阶段名 + 计数（聚焦） -->
+              <div v-if="summary.active" class="active-stage">
+                <span class="active-stage__pulse"></span>
+                <span class="active-stage__name">{{ summary.active.name }}中</span>
+                <span
+                  v-if="summary.active.current != null && summary.active.total != null"
+                  class="active-stage__count"
+                >{{ summary.active.current }}/{{ summary.active.total }}</span>
+              </div>
+              <!-- 行3：全阶段状态条（done/active/todo 三态着色） -->
+              <div class="stage-chips">
+                <template v-for="(r, i) in summary.rows" :key="r.id">
+                  <span v-if="i > 0" class="stage-chips__sep">/</span>
+                  <span class="stage-chip" :class="`stage-chip--${r.state}`">{{ r.name }}</span>
+                </template>
+              </div>
+            </template>
           </div>
 
           <!-- 完成状态 -->
@@ -262,7 +258,7 @@ import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import * as api from '@/api'
 import { validatePodcastInput } from '@/utils/validation'
-import { stageRows } from '@/utils/stageProgress'
+import { stageSummary } from '@/utils/stageProgress'
 import EpisodeTags from '@/components/EpisodeTags.vue'
 
 const router = useRouter()
@@ -993,31 +989,23 @@ onUnmounted(() => {
   border-color: #fecaca;
 }
 
-/* 处理中信息 */
+/* 处理中信息：紧凑三行（进度条 / 当前阶段 / 全阶段状态条）。
+   全阶段状态条用 done/active/todo 三态着色，让用户一眼看到进度位置。 */
 .processing-info {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
 }
 
-/* 与 .stage-row 同构的网格（16px 1fr auto + 8px gap）：
-   进度条左右边缘严格对齐 stage 行的名称列、% 对齐 detail 列。
-   progress-leading 占位对齐 glyph 列，消除"进度条比 stage 行短一截/
-   错位"的视觉问题（用户反馈"进行中的位置比进度条更靠边界"）。 */
-.progress-container {
-  display: grid;
-  grid-template-columns: 16px 1fr auto;
+/* 行1：总进度条 + % + N/M 步 */
+.progress-row {
+  display: flex;
   align-items: center;
-  column-gap: 8px;
-}
-
-.progress-leading {
-  width: 16px;
-  height: 6px;
+  gap: 8px;
 }
 
 .progress-bar {
-  width: 100%;
+  flex: 1;
   height: 6px;
   background: #e5e7eb;
   border-radius: 3px;
@@ -1034,79 +1022,27 @@ onUnmounted(() => {
   font-size: 12px;
   font-weight: 600;
   color: #4f8ef7;
-  min-width: 40px;
+  font-variant-numeric: tabular-nums;
 }
 
-/* 全阶段列表：每行 glyph + 名称 + 进度/计数 */
-.stage-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
+/* 步数计数推到最右，弱化为次要信息 */
+.progress-step {
+  margin-left: auto;
+  font-size: 11px;
+  color: #9ca3af;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 行2：当前阶段名 + 计数（聚焦） */
+.active-stage {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.stage-row {
-  display: grid;
-  grid-template-columns: 16px 1fr auto;
   align-items: center;
-  column-gap: 8px;
+  gap: 6px;
   font-size: 12px;
   line-height: 1.4;
 }
 
-.stage-row__glyph {
-  display: inline-flex;
-  justify-content: center;
-  font-size: 12px;
-}
-
-.stage-row__name {
-  color: #6b7280;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.stage-row__detail {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-variant-numeric: tabular-nums;
-}
-
-/* 已完成 */
-.stage-row--done .stage-row__glyph {
-  color: #10b981;
-}
-.stage-row--done .stage-row__name {
-  color: #9ca3af;
-}
-.stage-row__done {
-  color: #9ca3af;
-  font-size: 11px;
-}
-
-/* 进行中：强调色 + 脉冲点 */
-.stage-row--active .stage-row__name {
-  color: #4f8ef7;
-  font-weight: 600;
-}
-.stage-row__count {
-  color: #4f8ef7;
-  font-weight: 600;
-  font-size: 11px;
-}
-.stage-row__pct {
-  color: #6366f1;
-  font-size: 11px;
-}
-.stage-row__live {
-  color: #9ca3af;
-  font-size: 11px;
-}
-.stage-row__pulse {
+.active-stage__pulse {
   display: inline-block;
   width: 7px;
   height: 7px;
@@ -1115,10 +1051,56 @@ onUnmounted(() => {
   animation: indeterminate-blink 1.2s infinite;
 }
 
-/* 未开始：置灰 */
-.stage-row--todo .stage-row__glyph,
-.stage-row--todo .stage-row__name {
-  color: #cbd5e1;
+.active-stage__name {
+  color: #4f8ef7;
+  font-weight: 600;
+}
+
+.active-stage__count {
+  color: #6366f1;
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+}
+
+/* 行3：全阶段状态条。固定顺序列出所有阶段，按 done/active/todo 三态着色，
+   斜杠分隔符弱化到最浅，让阶段名本身的状态色成为视觉主角。
+   纯色彩 + 字重区分（不加 ✓ 等额外字形），保持紧凑、契合用户的"只列名字"意图。 */
+.stage-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.stage-chips__sep {
+  margin: 0 3px;
+  color: #e2e8eb;
+  font-weight: 400;
+}
+
+.stage-chip {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 已完成：active 主色蓝的弱化版（退色 slate-blue），同色相弱化，
+   既表达"已落地"又不引入第二种语义色，保持调色盘只一种 accent hue。
+   比 active 暗/灰一档，比 todo 的浅灰更"在场"，三态层次：active > done > todo。 */
+.stage-chip--done {
+  color: #7c93b8;
+  font-weight: 500;
+}
+
+/* 当前进行：主色蓝（饱和）+ 加粗，与进度条/脉冲点同色，承接视觉焦点。 */
+.stage-chip--active {
+  color: #4f8ef7;
+  font-weight: 600;
+}
+
+/* 未开始：浅灰退后，但保留可读，提示"还在后面"。 */
+.stage-chip--todo {
+  color: #cbd1d9;
+  font-weight: 400;
 }
 
 @keyframes indeterminate-blink {

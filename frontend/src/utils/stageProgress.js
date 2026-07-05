@@ -49,3 +49,28 @@ export function stageRows(ep) {
     }
   }).filter(Boolean)
 }
+
+/**
+ * 紧凑卡片视图的进度摘要：总阶段数、已完成数、当前步、活跃阶段、逐行数据。
+ *
+ * 用于把处理中卡片里"7 行纵向 stage 列表"压缩成三行
+ *   行1: [████████░░] 43%   N/M 步
+ *   行2: 转录中 · 440/4045
+ *   行3: 下载 / 转录 / 分章 / 摘要 / 翻译 / 亮点 / 洞察   （按状态着色）
+ *
+ * - `total`/`done` 用 stageRows(ep).length 与 done 计数（动态）—— 中文源跳过
+ *   translate 时为 6 而非 7，避免"6/7 但已全部完成"的歧义。
+ * - `step` = done + (active?1:0)，reached 语义：用户已踏上第 N 步。
+ *   比 done 更贴合"第 N 步 / 共 M 步"的 stepper 直觉（最后一步进行中即 M/M）。
+ * - `rows` 透传 stageRows 结果，供行3 chip 渲染复用，避免模板里二次计算。
+ *
+ * @param {{current_stage?: string, stages?: Array}} ep
+ * @returns {{total:number, done:number, step:number, active:({id:string,name:string,state:string,progress:number,current:number|null,total:number|null}|null), rows:Array<{id:string,name:string,state:string,progress:number,current:number|null,total:number|null}>}}
+ */
+export function stageSummary(ep) {
+  const rows = stageRows(ep)
+  const done = rows.filter((r) => r.state === 'done').length
+  const active = rows.find((r) => r.state === 'active') || null
+  const step = done + (active ? 1 : 0)
+  return { total: rows.length, done, step, active, rows }
+}
