@@ -915,11 +915,35 @@ class AudioProcessPipeline:
                 transcript,
                 progress_cb=self._make_db_progress_cb(stages, "highlight", episode_id),
             )
+            # 与 _process_internal 对齐：算完立即落盘 checkpoint，既供崩溃恢复，
+            # 也供下游 product_insights 读取（它依赖 highlight.json 的 tldr_zh 作标题）。
+            self._checkpoint_json(episode_id, "highlight.json", highlight.model_dump())
             await self._complete_stage(stages, "highlight", completed_stages, sync_stages)
         else:
             logger.info(f"Highlight already exists for {episode_id}")
+            # _load_intermediate_results 不加载 highlight，这里就地复用 checkpoint，
+            # 保证下方 save 阶段拿到已存在的亮点卡（旧实现此处 highlight 为未绑定 → save 传 None）。
+            from .models import HighlightCard
+            from .utils.io import safe_read_json
+            highlight_data = safe_read_json(
+                self.data_dir / "media" / episode_id / "highlight.json"
+            )
+            highlight = HighlightCard(**highlight_data) if highlight_data else None
 
-        # === 阶段 7: 持久化（始终执行，确保所有文件都保存）===
+        # === 阶段 7: 产品和技术洞察（与 _process_internal 332-340 对齐）===
+        # 此前 resume 路径完全没有这一阶段，导致走 resume 端点的 episode 永远缺
+        # product_insights。它内部会读 highlight.json（上一阶段已保证写盘）+ 自写
+        # product_insights.json。
+        await self._add_stage(stages, "product_insights", EpisodeStatus.LLM_RUNNING, sync_stages)
+
+        product_insights = await run_product_insights_stage(
+            episode_id,
+            self.data_dir,
+            progress_cb=self._make_db_progress_cb(stages, "product_insights", episode_id),
+        )
+        await self._complete_stage(stages, "product_insights", completed_stages, sync_stages)
+
+        # === 阶段 8: 持久化（与 _process_internal 342-372 对齐）===
         await self._add_stage(stages, "done", EpisodeStatus.READY, sync_stages)
 
         save_episode_bundle(
@@ -928,8 +952,25 @@ class AudioProcessPipeline:
             transcript=transcript,
             outline={"entries": chapters},
             summaries=summaries,
-            highlight=intermediate.get('highlight') if existing.get('highlight') else None,
+            highlight=highlight,
         )
+
+        # 保存派生数据到数据库（resume 路径此前漏写全部四个 repo）
+        if chapters:
+            from app.repositories import OutlineRepository
+            await OutlineRepository.set(episode_id, chapters)
+
+        if summaries:
+            from app.repositories import SummariesRepository
+            await SummariesRepository.set(episode_id, summaries)
+
+        if highlight:
+            from app.repositories import HighlightRepository
+            await HighlightRepository.set(episode_id, highlight.model_dump())
+
+        if product_insights:
+            from app.repositories import ProductInsightsRepository
+            await ProductInsightsRepository.set(episode_id, product_insights.model_dump())
 
         await self._complete_stage(stages, "done", completed_stages, sync_stages)
 
