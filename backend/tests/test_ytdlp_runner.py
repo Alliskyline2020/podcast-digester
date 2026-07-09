@@ -299,3 +299,133 @@ class TestPickSourceAndMerge:
 
         assert result.language == "en"
         assert result.segments[0].text_original == "Hello"
+
+
+class TestFailFastNoSubtitles:
+    """无字幕视频应在 CC 抓取链入口 fail-fast, 直接回退 ASR。
+
+    背景: ep_1783401350118 (XEhf371Aeso) 实测 'has no subtitles' + 'has no
+    automatic captions', 但 fetch_youtube_subtitles 仍逐条策略重试 (每条 ~4min
+    超时), 烧 ~30-45min 才回退 ASR。应在入口用 --list-subs (~10s) 判定存在性。
+    """
+
+    def test_signal_false_when_manual_and_auto_both_absent(self):
+        """XEhf371Aeso 实测输出 → 明确无字幕, signal=False (应 fail-fast)。"""
+        from app.sources.ytdlp_runner import _has_subtitles_signal
+        output = (
+            "[youtube] XEhf371Aeso: Downloading webpage\n"
+            "[youtube] XEhf371Aeso: Downloading android vr player API JSON\n"
+            "XEhf371Aeso has no automatic captions\n"
+            "XEhf371Aeso has no subtitles\n"
+        )
+        assert _has_subtitles_signal(output) is False
+
+    def test_signal_true_when_subs_listed(self):
+        """有字幕清单 → signal=True (继续策略链)。"""
+        from app.sources.ytdlp_runner import _has_subtitles_signal
+        output = (
+            "Available subtitles for XEhf371Aeso:\n"
+            "Language formats\n"
+            "en       vtt, ttml\n"
+            "zh-Hans  vtt\n"
+        )
+        assert _has_subtitles_signal(output) is True
+
+    def test_signal_conservative_when_only_one_absent(self):
+        """只有 'no subtitles' 但没提 auto captions (或反之) → 不确定, 保守 True。"""
+        from app.sources.ytdlp_runner import _has_subtitles_signal
+        assert _has_subtitles_signal("XEhf371Aeso has no subtitles\n") is True
+        assert _has_subtitles_signal("XEhf371Aeso has no automatic captions\n") is True
+
+    def test_signal_conservative_on_empty_output(self):
+        """空输出 → 不确定, 保守 True (不阻断)。"""
+        from app.sources.ytdlp_runner import _has_subtitles_signal
+        assert _has_subtitles_signal("") is True
+
+    def test_fetch_short_circuits_when_probe_says_no_subtitles(self, monkeypatch):
+        """探测返回 '无字幕' 时, fetch_youtube_subtitles 立即返回 None,
+        且绝不进入策略链 (_try_subtitle_fetch 零调用)。
+
+        用 call-counter 而非异常: fetch 的 except 会吞掉 _try_subtitle_fetch
+        抛出的异常 → 抛异常的 mock 会让测试假绿。
+        """
+        import app.sources.ytdlp_runner as Y
+
+        async def fake_probe(url, cookies_txt=None):
+            return False
+
+        strategy_calls = []
+
+        async def fake_try(*args, **kwargs):
+            strategy_calls.append(1)
+            return False, None, "no_valid_subtitle"
+
+        monkeypatch.setattr(Y, "_video_has_any_subtitles", fake_probe)
+        monkeypatch.setattr(Y, "_try_subtitle_fetch", fake_try)
+
+        result = asyncio.run(
+            Y.fetch_youtube_subtitles("https://www.youtube.com/watch?v=noneCC1")
+        )
+
+        assert result is None, "无字幕应直接返回 None 回退 ASR"
+        assert strategy_calls == [], "fail-fast 下不应进入任何 CC 策略"
+
+    def test_probe_retries_on_transient_timeout(self, monkeypatch):
+        """probe 首次因瞬时限流超时, 重试拿到明确 '无字幕' → 返回 False。
+
+        背景: ep_1783401350118 首跑时 probe 在 YouTube 限流下 40s 超时, 单次失败
+        → 保守 True → 退回 30-45min grind。数分钟后复测仅 3.7s 成功 → 证明是瞬态。
+        应重试而非一次失败就放弃。
+        """
+        import asyncio as _aio
+        import app.sources.ytdlp_runner as Y
+
+        calls = {"n": 0}
+
+        class _FakeProc:
+            def __init__(self, comm):
+                self._comm = comm
+
+            async def communicate(self):
+                if isinstance(self._comm, BaseException):
+                    raise self._comm
+                return self._comm
+
+        async def fake_exec(*args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return _FakeProc(_aio.TimeoutError())  # 首次瞬时限流超时
+            return _FakeProc(
+                (b"X has no automatic captions\nX has no subtitles", b"")
+            )
+
+        async def fake_sleep(_n):
+            return None
+
+        monkeypatch.setattr(_aio, "create_subprocess_exec", fake_exec)
+        monkeypatch.setattr(_aio, "sleep", fake_sleep)
+
+        result = asyncio.run(Y._video_has_any_subtitles("https://x", None))
+        assert result is False, "重试后应拿到明确 '无字幕' 结论 (False), 不保守 True"
+        assert calls["n"] >= 2, "首次超时应触发重试"
+
+    def test_probe_conservative_when_all_attempts_timeout(self, monkeypatch):
+        """全部重试均超时 → 仍保守返回 True (宁可 grind 也不误杀有字幕视频)。"""
+        import asyncio as _aio
+        import app.sources.ytdlp_runner as Y
+
+        class _FakeProc:
+            async def communicate(self):
+                raise _aio.TimeoutError()
+
+        async def fake_exec(*args, **kwargs):
+            return _FakeProc()
+
+        async def fake_sleep(_n):
+            return None
+
+        monkeypatch.setattr(_aio, "create_subprocess_exec", fake_exec)
+        monkeypatch.setattr(_aio, "sleep", fake_sleep)
+
+        result = asyncio.run(Y._video_has_any_subtitles("https://x", None))
+        assert result is True, "全部重试超时 → 保守放行 True"

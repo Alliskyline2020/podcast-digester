@@ -605,6 +605,61 @@ async def _try_subtitle_fetch(
     return False, None, "no_valid_subtitle"
 
 
+def _has_subtitles_signal(output: str) -> bool:
+    """解析 yt-dlp --list-subs 输出, 判断视频是否存在任何字幕。
+
+    yt-dlp 在 manual 与 auto 字幕都缺失时会同时打印两行:
+        XEhf371Aeso has no subtitles
+        XEhf371Aeso has no automatic captions
+    只有当二者同时出现才判定为「确定无字幕」(返回 False)。
+    其余情况 (有字幕清单 / 只缺其一 / 输出为空) 一律保守返回 True,
+    避免误杀可下载字幕的视频, 让其继续走策略链。
+    """
+    if not output:
+        return True
+    no_manual = "has no subtitles" in output
+    no_auto = "has no automatic captions" in output
+    return not (no_manual and no_auto)
+
+
+async def _video_has_any_subtitles(url: str, cookies_txt=None) -> bool:
+    """~10s 探测视频是否有任何字幕 (manual 或 auto)。
+
+    用 yt-dlp --list-subs --skip-download 快速判定, 用于无字幕视频的
+    fail-fast: 探测明确无字幕时, 跳过整条 ~30min 的 CC 策略链直接回退 ASR。
+
+    带重试 (最多 3 次): 首次 --list-subs 常因 YouTube 瞬时限流超时 (实测
+    ep_1783401350118 首跑 40s 超时, 数分钟后仅 3.7s 成功)。单次失败不应退回
+    30-45min 策略链 grind。拿到明确结论 (有/无字幕) 立即返回; 全部超时/异常
+    才保守返回 True (不阻断), 宁可多试也不要误杀有字幕视频。
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    cmd = YTDLP_CMD + [
+        "--skip-download", "--list-subs", "--no-warnings",
+        "--socket-timeout", "15",
+        url,
+    ]
+    if cookies_txt:
+        cmd += ["--cookies", str(cookies_txt)]
+
+    for attempt in range(1, 4):
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=25)
+            return _has_subtitles_signal((stdout or b"").decode("utf-8", "ignore"))
+        except Exception as e:
+            logger.info(f"字幕存在性探测 {attempt}/3 失败: {str(e)[:60]}")
+            if attempt < 3:
+                await asyncio.sleep(3)
+    logger.info("字幕探测 3 次均失败, 保守放行 (不 fail-fast)")
+    return True
+
+
 async def fetch_youtube_subtitles(url: str) -> Optional[dict]:
     """
     尝试获取 YouTube 字幕（支持中英文手动和自动生成字幕）
@@ -650,6 +705,13 @@ async def fetch_youtube_subtitles(url: str) -> Optional[dict]:
         # 策略准备
         available_browsers = get_available_browsers()
         cookies_txt = find_cookies_txt()
+
+        # fail-fast: 先用 --list-subs (~10s) 探测视频是否有任何字幕。
+        # 明确无字幕 (manual + auto 均无) 时直接返回 None, 避免逐条策略重试
+        # (每条 ~4min 超时) 白烧 30-45min 才回退 ASR。探测本身异常则放行。
+        if not await _video_has_any_subtitles(safe_url, cookies_txt):
+            logger.info("视频无任何字幕 (manual+auto 均无), 跳过 CC 抓取链, 回退 ASR")
+            return None
 
         # 2026 YouTube 翻译型自动字幕代码是 xx-en 格式（"from English"），
         # 旧版只有 zh-Hans/en，匹配不到 zh-Hans-en/en-en，导致"no subtitles"。
