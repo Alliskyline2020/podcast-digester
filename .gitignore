@@ -87,6 +87,11 @@ data/*.db
 data/*.db-journal
 data/*.db-wal
 data/*.db-shm
+# backend/app.db 是 cwd=backend 时的运行时 SQLite（含 WAL/journal 边车）
+backend/app.db
+backend/app.db-journal
+backend/app.db-wal
+backend/app.db-shm
 # 备份与一次性快照（DB/媒体副本/迁移产物，非应用数据）
 data/media.backup-*/
 data/*_backup/
