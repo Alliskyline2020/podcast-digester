@@ -291,8 +291,10 @@ class EpisodeRepository:
                     WHERE id = ?
                 """, (status, error_msg, now, episode_id))
             else:
+                # 不带 error_msg ⇒ 成功/中性状态，显式清空残留错误，
+                # 否则先失败后成功的 episode 在 status=ready 时仍显示旧错误文本。
                 await db.execute("""
-                    UPDATE episode SET status = ?, updated_at = ?
+                    UPDATE episode SET status = ?, error_msg = NULL, updated_at = ?
                     WHERE id = ?
                 """, (status, now, episode_id))
             await db.commit()
@@ -671,8 +673,11 @@ class EpisodeRepositorySync:
                     WHERE id = ?
                 """, (status, error_msg, now, episode_id))
             else:
+                # 不带 error_msg ⇒ 成功/中性状态，显式清空残留错误。
+                # save_episode_bundle 的 ready 路径走这里；不清空会让已就绪的
+                # episode 长期挂着旧的失败文本。
                 db.execute("""
-                    UPDATE episode SET status = ?, updated_at = ?
+                    UPDATE episode SET status = ?, error_msg = NULL, updated_at = ?
                     WHERE id = ?
                 """, (status, now, episode_id))
             db.commit()
