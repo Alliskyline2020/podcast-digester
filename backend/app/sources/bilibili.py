@@ -46,9 +46,11 @@ class BilibiliParser(BaseSourceParser):
         # 传递平台标识以应用 Bilibili 特定配置
         audio_path = await run_ytdlp(url, out_dir, on_progress, platform="bilibili")
 
-        # 获取标题
+        # 获取标题（bilibili 反爬需 cookie，传 platform 与下载路径一致）
         bv_id = self._extract_bv(url)
-        title = await get_video_title(url, fallback_name=f"Bilibili: {bv_id}")
+        title = await get_video_title(
+            url, fallback_name=f"Bilibili: {bv_id}", platform="bilibili"
+        )
 
         return ParseResult(
             title=title,
