@@ -16,13 +16,15 @@
 
 </div>
 
+🌐 **简体中文** | [English](./README.en.md)
+
 ---
 
 ## ✨ 它解决什么问题
 
 信息工作者面对一集 2 小时的播客，最大的成本不是「听不懂」，而是**「不知道值不值得听」**。Podcast Digester 把一集音频蒸馏成：
 
-- 一句话 **TL;DR** + **值听裁定**（Deep Listen / Skip）
+- 一句话 **TL;DR** + **值听裁定**（Deep Listen / Skim / Skip 三档，拿不准默认 Skim）
 - **章节大纲**与逐章中文摘要
 - 五类**精华亮点**：`fact` 事实 / `insight` 洞见 / `quote` 金句 / `contrarian` 反共识 / `story` 故事，每条都带原始字幕引用与时间戳
 - **产品 / 技术 / 市场**三个维度的洞察，以及节目中提到的公司清单
@@ -118,7 +120,10 @@ flowchart TB
 
 - **Python 3.11+**、**Node.js 18+**
 - **DeepSeek API Key**（处理流程的核心依赖，[在此获取](https://platform.deepseek.com/)）
-- macOS / Linux（Windows 未测试；服务管理用到了 launchd，Linux 需自行替换为 systemd 或前台运行）
+- **macOS 13+**（推荐）：全功能；**无字幕源**可用 Apple AFM 3 本地转录
+- **Linux / WSL**：仅支持**自带平台字幕**的源（YouTube / B 站等有 CC 的内容）；无字幕源需 ASR 转录，而 ASR 走 Apple 平台，Linux 无法回退
+- Windows 未测试
+- macOS 首次转录无字幕源前，需构建 AFM 3 桥接工具：`cd backend/tools && ./build_apple_asr.sh`（源码随仓库提供，编译产物不入库）
 
 ### 1. 克隆
 
