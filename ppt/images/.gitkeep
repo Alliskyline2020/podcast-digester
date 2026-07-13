@@ -1,2 +1,0 @@
-# P6 Library 截图槽位：把 Library 界面截图存为 06-library.png 放进此目录，
-# 再把 ppt/index.html 里 P6 的占位 frame-img 换成 <img src="images/06-library.png">。

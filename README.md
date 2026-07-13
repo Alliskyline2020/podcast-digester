@@ -148,11 +148,13 @@ npm install
 
 ### 4. 运行
 
-一键启动（前台，前后端都起）：
+一键启动（前台，启动 API 与前端）：
 
 ```bash
 ./start.sh
 ```
+
+> ⚠️ `start.sh` 只起 **API + 前端**，不启动 Worker。Pipeline 由 Worker 跑，必须单独启动（见下方「终端 2」），否则粘贴链接后不会处理。
 
 或分开跑：
 
@@ -160,8 +162,8 @@ npm install
 # 后端 API（终端 1）
 cd backend && source venv/bin/activate && uvicorn app.main:app --host 127.0.0.1 --port 8000
 
-# Worker，跑 Pipeline（终端 2）
-cd backend && source venv/bin/activate && python -m app.worker
+# Worker，跑 Pipeline（终端 2）—— 必须单独起，start.sh 不含
+cd backend && source venv/bin/activate && python worker.py
 
 # 前端（终端 3）
 cd frontend && npm run dev
@@ -169,7 +171,7 @@ cd frontend && npm run dev
 
 打开 **http://localhost:5173/** ，粘贴一个播客 / 视频链接即可。
 
-> macOS 下推荐用 launchd 常驻托管 API 与 Worker（可参考 `docs/superpowers/deployment-guide.md`），终端关闭也不会中断长任务。
+> macOS 下推荐用 launchd 常驻托管 API 与 Worker（参考根目录 `start.sh` / `stop.sh`，或自行编写 `~/Library/LaunchAgents/*.plist`），终端关闭也不会中断长任务。
 
 ## ⚙️ 配置
 
@@ -212,7 +214,7 @@ podcast-digester/
 │   │   └── utils/               # 阶段进度 / 格式化等
 │   └── tests/                   # Vitest
 ├── data/                        # SQLite + media/ep_*（gitignore，不入库）
-├── docs/                        # PRD / 字幕校正指南 / 部署指南
+├── docs/                        # PRD / 字幕校正指南 / 项目介绍 PPT
 └── start.sh / stop.sh           # 一键启停
 ```
 
@@ -240,7 +242,7 @@ cd frontend && npm test
 
 - [`docs/PRD.md`](./docs/PRD.md) — 产品需求文档
 - [`docs/transcript-correction-guide.md`](./docs/transcript-correction-guide.md) — 字幕校正指南
-- [`docs/superpowers/`](./docs/superpowers/) — 架构决策、部署指南与开发记录
+- [`docs/presentation/`](./docs/presentation/) — 项目介绍 PPT（瑞士风版）
 
 ## 🙏 致谢
 

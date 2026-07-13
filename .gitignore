@@ -134,3 +134,27 @@ backend/rerun_*.py
 backend/repair_*.py
 backend/fill_punct_fallback.py
 backend/import_orphan_episodes.py
+# 进度监控 / 批量生成 / 一次性测试脚本（过程件，非生产代码）
+backend/*monitor*.py
+backend/generate_*.py
+backend/add_*.py
+backend/run_tests*.py
+backend/run_tests*.sh
+backend/test_fixes.sh
+backend/verify_fixes.sh
+backend/add_glossary_example.sh
+# 根目录 & backend 下的过程报告 / 阶段总结（README、LICENSE 除外；docs/ 保留）
+/*_SUMMARY.md
+/*_REPORT.md
+/*_COMPLETE.md
+/fix-report.md
+/FIX*.md
+/START*.md
+/QUICK_START.md
+/DEPLOYMENT_*.md
+backend/*_SUMMARY.md
+backend/*_REPORT.md
+backend/README_FIXES.md
+backend/AFM3_INTEGRATION.md
+backend/TASK_STATUS.md
+backend/YOUTUBE_*.md
