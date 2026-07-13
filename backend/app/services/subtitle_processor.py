@@ -18,7 +18,6 @@ from .subtitle_align import semantic_ok
 logger = logging.getLogger(__name__)
 
 POLISH_BATCH_SIZE = 15
-POLISH_MODEL = "deepseek-chat"
 POLISH_MAX_TOKENS = 8000
 
 POLISH_SYSTEM = """你是专业的播客字幕编辑。对 ASR 字幕(中文或英文)做两件事:
@@ -135,7 +134,6 @@ class SubtitleProcessor:
                         system=POLISH_SYSTEM,
                         user=_build_polish_user(inputs),
                         temperature=0.2,
-                        model=POLISH_MODEL,
                         max_tokens=POLISH_MAX_TOKENS,
                         response_format={"type": "json_object"},
                     )

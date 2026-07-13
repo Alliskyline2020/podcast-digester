@@ -68,7 +68,6 @@ async def extract_product_insights(
             user=user_input,
             temperature=0.3,
             response_format={"type": "json_object"},
-            model="deepseek-v4-flash",  # 洞察提取需要 thinking(判断产品/技术/市场价值)
             max_tokens=8192,
         )
 

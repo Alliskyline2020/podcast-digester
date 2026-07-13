@@ -91,7 +91,6 @@ async def extract_highlights(
                 user=user_input,
                 temperature=0.3,
                 response_format={"type": "json_object"},
-                model="deepseek-v4-flash",  # 金句提取需要 thinking(判断价值/洞察)
                 max_tokens=16384,
             )
             if i == 0:
@@ -282,7 +281,6 @@ async def _rank_chapters_by_value(
             system=RANK_CHAPTERS_SYSTEM,
             user=build_rank_chapters_user(title, duration_min, outline_block, summaries_block),
             temperature=0.2,
-            model="deepseek-v4-flash",  # 章节价值排序需要 thinking(判断数据点/洞察)
             max_tokens=8000,  # 94 章排序列表长,4000 不够
         )
         ranked = result.get("ranked_chapter_ids", [])
