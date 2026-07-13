@@ -19,8 +19,8 @@ import json
 from ..config import (
     DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL,
     MAX_RETRIES, BASE_DELAY, MAX_DELAY, DEFAULT_TEMPERATURE,
-    calculate_llm_cost,
 )
+from .cost import cost as calculate_llm_cost
 
 logger = logging.getLogger(__name__)
 
