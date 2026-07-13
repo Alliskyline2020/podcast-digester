@@ -71,6 +71,9 @@ PLATFORM_CONFIGS = {
         "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "referer": "https://www.bilibili.com",
         "format": "bestaudio/best",
+        # Bilibili 反爬：不带有效 SESSDATA/buvid cookie 会直接 412。
+        # 参考 feiskyer/video-skills：鉴权平台统一用 --cookies-from-browser。
+        "needs_cookies": True,
     },
     "xiaoyuzhou": {
         "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
@@ -123,6 +126,8 @@ def _build_opts(platform: str = None) -> Dict[str, Any]:
             opts["_user_agent"] = platform_config["user_agent"]
         if "referer" in platform_config:
             opts["_referer"] = platform_config["referer"]
+        if platform_config.get("needs_cookies"):
+            opts["_needs_cookies"] = True
 
     return opts
 
@@ -200,6 +205,28 @@ async def run_ytdlp(
     referer = extra_opts.get("referer") if extra_opts else opts.get("_referer")
     if referer:
         cmd.extend(["--referer", referer])
+
+    # 添加 Cookies（反爬平台需要：bilibili 等）
+    # YouTube 音频走 android_vr 客户端无需 cookie；bilibili 不带 cookie 会 412。
+    # 浏览器是多域名活跃会话（最可靠）；cookies.txt 通常是单站点导出（如 YouTube），
+    # 对其他平台无效——因此这里浏览器优先，cookies.txt 仅作兜底。
+    if opts.get("_needs_cookies"):
+        import logging
+        _logger = logging.getLogger(__name__)
+        browser = get_best_browser()
+        if browser:
+            cmd.extend(["--cookies-from-browser", browser])
+            _logger.info(f"[{platform}] 使用浏览器 cookies 鉴权下载: {browser}")
+        else:
+            cookies_file = find_cookies_txt()
+            if cookies_file and cookies_file.exists():
+                cmd.extend(["--cookies", str(cookies_file)])
+                _logger.info(f"[{platform}] 无浏览器 cookie，回退 cookies.txt 鉴权下载")
+            else:
+                _logger.warning(
+                    f"[{platform}] 需要 cookie 鉴权但未找到浏览器 cookie 或 cookies.txt，"
+                    f"大概率在 412 反爬处失败。请在 Chrome 登录该平台，或放置 cookies.txt。"
+                )
 
     # 执行下载
     process = await asyncio.create_subprocess_exec(
