@@ -95,7 +95,8 @@ async def chat_json(
 
     try:
         # complete() 已重试 API 错误；这里 retry_on_json=True 让坏 JSON 也触发整体重试
-        return await _retry_with_backoff(_do_call, retry_on_json=True)
+        # retry_api=False 避免与 complete() 内部重试嵌套（仅重试 JSON 解析错误）
+        return await _retry_with_backoff(_do_call, retry_on_json=True, retry_api=False)
     except LLMParseError:
         raise
     except Exception as e:
@@ -143,7 +144,8 @@ async def chat_structured(
         return obj
 
     try:
-        return await _retry_with_backoff(_do_call, retry_on_json=True)
+        # complete() 已重试 API 错误；retry_api=False 避免与内部重试嵌套（仅重试 JSON 解析错误）
+        return await _retry_with_backoff(_do_call, retry_on_json=True, retry_api=False)
     except Exception as e:
         raise LLMParseError(f"Failed to get structured response: {e}")
 

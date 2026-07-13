@@ -29,10 +29,11 @@ def _is_retryable(err: Exception) -> bool:
     ))
 
 
-async def _retry_with_backoff(func, *, retry_on_json: bool = False):
+async def _retry_with_backoff(func, *, retry_on_json: bool = False, retry_api: bool = True):
     """指数退避重试。仅重试可重试错误（_is_retryable）。
 
     retry_on_json=True 时也重试 json.JSONDecodeError（供 chat_json 包住 parse 用）。
+    retry_api=False 时跳过 API 错误重试（避免与 complete() 内部重试嵌套）。
     """
     import json  # 局部导入，避免非 JSON 路径强依赖
     last_error = None
@@ -47,7 +48,7 @@ async def _retry_with_backoff(func, *, retry_on_json: bool = False):
             continue
         except Exception as e:
             last_error = e
-            if not _is_retryable(e) or attempt >= MAX_RETRIES:
+            if not retry_api or not _is_retryable(e) or attempt >= MAX_RETRIES:
                 raise
             delay = min(BASE_DELAY * (2 ** attempt), MAX_DELAY)
             if "429" in str(e).lower():

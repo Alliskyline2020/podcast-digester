@@ -79,3 +79,50 @@ async def test_complete_does_not_retry_on_non_retryable(monkeypatch):
     with pytest.raises(Exception, match="Invalid API key"):
         await client_module.complete(messages=[{"role": "user", "content": "x"}])
     assert attempts["n"] == 1  # 没重试
+
+
+@pytest.mark.asyncio
+async def test_retry_with_backoff_skips_api_retry_when_retry_api_false(monkeypatch):
+    """当 retry_api=False 时，不重试可重试的 API 错误（如 429）。"""
+    import json
+    attempts = {"n": 0}
+
+    async def raise_429():
+        attempts["n"] += 1
+        raise Exception("429 Too Many Requests")
+
+    # 加速测试：把退避延迟压到 ~0
+    monkeypatch.setattr(client_module, "BASE_DELAY", 0.0)
+    monkeypatch.setattr(client_module, "MAX_DELAY", 0.0)
+
+    with pytest.raises(Exception, match="429 Too Many Requests"):
+        await client_module._retry_with_backoff(
+            raise_429, retry_on_json=True, retry_api=False
+        )
+
+    # retry_api=False 时，可重试的 API 错误也不重试，直接抛出
+    assert attempts["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_retry_with_backoff_retries_json_when_retry_on_json_true_and_retry_api_false(monkeypatch):
+    """当 retry_on_json=True 且 retry_api=False 时，仅重试 JSON 解析错误，不重试 API 错误。"""
+    import json
+    attempts = {"n": 0}
+
+    async def raise_json_then_ok():
+        attempts["n"] += 1
+        if attempts["n"] <= 2:
+            raise json.JSONDecodeError("bad json", "doc", 0)
+        return {"ok": True}
+
+    # 加速测试：把退避延迟压到 ~0
+    monkeypatch.setattr(client_module, "BASE_DELAY", 0.0)
+    monkeypatch.setattr(client_module, "MAX_DELAY", 0.0)
+
+    result = await client_module._retry_with_backoff(
+        raise_json_then_ok, retry_on_json=True, retry_api=False
+    )
+
+    assert result == {"ok": True}
+    assert attempts["n"] == 3  # 前两次 JSONDecodeError，第三次成功
