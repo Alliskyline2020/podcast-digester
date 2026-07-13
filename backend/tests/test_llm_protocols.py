@@ -146,7 +146,8 @@ async def test_anthropic_adapter_extracts_system_and_maps_roles(monkeypatch):
 @pytest.mark.asyncio
 async def test_anthropic_adapter_normalizes_stop_reasons(monkeypatch):
     for raw, want in [("end_turn", "stop"), ("stop_sequence", "stop"),
-                      ("max_tokens", "length")]:
+                      ("max_tokens", "length"), ("pause_turn", "length"),
+                      ("tool_use", "tool_calls"), ("refusal", "refusal")]:
         fake = _FakeAnthropicClient(_FakeAnthropicResponse("x", stop_reason=raw))
         monkeypatch.setattr("anthropic.AsyncAnthropic", lambda **kw: fake)
         adapter = AnthropicAdapter(api_key="sk", base_url="", timeout=60)

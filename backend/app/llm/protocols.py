@@ -77,11 +77,19 @@ def _split_system(messages):
 
 
 def _normalize_stop_reason(stop_reason: Optional[str]) -> str:
-    """Anthropic stop_reason → 统一 finish_reason。"""
+    """Anthropic stop_reason → 统一 finish_reason。
+
+    pause_turn（系统暂停长输出）归一化为 length：内容被截断、JSON 不完整，
+    与 max_tokens 同等对待，使 chat_json 立即给出"截断，需增大 max_tokens"的
+    清晰错误，而非对坏 JSON 重试。tool_use/refusal 为未来扩展覆盖。
+    """
     return {
         "end_turn": "stop",
         "stop_sequence": "stop",
         "max_tokens": "length",
+        "pause_turn": "length",
+        "tool_use": "tool_calls",
+        "refusal": "refusal",
     }.get(stop_reason or "", stop_reason or "stop")
 
 
