@@ -230,12 +230,7 @@ async def sync_subtitle_segments_llm(episode_id: str) -> SyncSubtitlesResponse:
     try:
         from ..services.llm_subtitle_processor import LLMSubtitleProcessor
 
-        # 获取 API key
-        api_key = os.getenv("DEEPSEEK_API_KEY")
-        if not api_key:
-            raise HTTPException(status_code=500, detail="DEEPSEEK_API_KEY 未配置")
-
-        processor = LLMSubtitleProcessor(api_key=api_key)
+        processor = LLMSubtitleProcessor()
 
         # LLM 智能分段
         logger.info(f"[LLM Sync] Calling LLM for segmentation...")
@@ -312,11 +307,7 @@ async def extract_insights_llm(
     try:
         from ..services.llm_subtitle_processor import LLMSubtitleProcessor
 
-        api_key = os.getenv("DEEPSEEK_API_KEY")
-        if not api_key:
-            raise HTTPException(status_code=500, detail="DEEPSEEK_API_KEY 未配置")
-
-        processor = LLMSubtitleProcessor(api_key=api_key)
+        processor = LLMSubtitleProcessor()
 
         logger.info(f"[LLM Insights] Extracting insights for {episode_id}")
         result = await processor.extract_insights(full_transcript, episode_id, max_insights)
@@ -371,11 +362,7 @@ async def correct_transcript_llm(episode_id: str) -> CorrectTranscriptResponse:
         from ..services.llm_subtitle_processor import LLMSubtitleProcessor
         from ..utils.io import atomic_write_json
 
-        api_key = os.getenv("DEEPSEEK_API_KEY")
-        if not api_key:
-            raise HTTPException(status_code=500, detail="DEEPSEEK_API_KEY 未配置")
-
-        processor = LLMSubtitleProcessor(api_key=api_key)
+        processor = LLMSubtitleProcessor()
 
         logger.info(f"[LLM Correction] Starting correction for {episode_id} ({total_segments} segments)")
 

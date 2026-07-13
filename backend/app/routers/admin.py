@@ -78,19 +78,17 @@ async def batch_sync_subtitle_segments(request: BatchSyncRequest) -> BatchSyncRe
             )
 
     # 准备 LLM 处理器
-    api_key = os.getenv("DEEPSEEK_API_KEY")
-    use_llm = api_key is not None
     llm_processor = None
     segmenter = None
+    use_llm = True
 
-    if use_llm:
-        try:
-            from ..services.llm_subtitle_processor import LLMSubtitleProcessor
-            llm_processor = LLMSubtitleProcessor(api_key=api_key)
-            logger.info(f"Batch sync: using LLM segmentation")
-        except Exception as e:
-            logger.warning(f"Batch sync: LLM initialization failed, using rule-based: {e}")
-            use_llm = False
+    try:
+        from ..services.llm_subtitle_processor import LLMSubtitleProcessor
+        llm_processor = LLMSubtitleProcessor()
+        logger.info("Batch sync: using LLM segmentation")
+    except Exception as e:
+        logger.warning(f"Batch sync: LLM initialization failed, using rule-based: {e}")
+        use_llm = False
 
     if not use_llm:
         from ..services.subtitle_segmenter import SubtitleSegmenter

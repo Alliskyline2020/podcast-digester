@@ -7,8 +7,8 @@ import json
 import logging
 import re
 from typing import List, Dict, Any, Optional
-from openai import OpenAI
 from app.utils import clean_llm_text
+from ..llm import complete
 
 logger = logging.getLogger(__name__)
 
@@ -42,18 +42,9 @@ def _parse_llm_json(content: str, context: str = "LLM") -> Any:
 class LLMSubtitleProcessor:
     """LLM 驱动的字幕处理器"""
 
-    def __init__(self, api_key: str, base_url: str = "https://api.deepseek.com/v1"):
-        """
-        初始化 LLM 处理器
-
-        Args:
-            api_key: DeepSeek API key
-            base_url: API base URL
-        """
-        self.client = OpenAI(
-            api_key=api_key,
-            base_url=base_url
-        )
+    def __init__(self, api_key: str | None = None, base_url: str | None = None):
+        """初始化。api_key/base_url 保留参数仅为向后兼容，实际配置走 app.llm.get_config()。"""
+        # 不再自建客户端：所有调用经 app.llm.complete() 统一分发。
 
     async def segment_transcript(
         self,
@@ -120,8 +111,7 @@ class LLMSubtitleProcessor:
 请严格按照 JSON 格式输出，不要添加任何其他内容。"""
 
         try:
-            response = self.client.chat.completions.create(
-                model="deepseek-chat",
+            resp = await complete(
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": transcript_text}
@@ -131,7 +121,7 @@ class LLMSubtitleProcessor:
             )
 
             # 解析响应
-            content = response.choices[0].message.content
+            content = resp.content
             if not content:
                 raise ValueError("LLM returned empty content")
 
@@ -268,8 +258,7 @@ class LLMSubtitleProcessor:
 请严格按照 JSON 格式输出。"""
 
         try:
-            response = self.client.chat.completions.create(
-                model="deepseek-chat",
+            resp = await complete(
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": transcript_text}
@@ -278,7 +267,7 @@ class LLMSubtitleProcessor:
                 response_format={"type": "json_object"}
             )
 
-            content = response.choices[0].message.content
+            content = resp.content
             if not content:
                 raise ValueError("LLM returned empty content")
 
@@ -388,8 +377,7 @@ class LLMSubtitleProcessor:
 直接输出清洗后的文本，不要添加任何解释。"""
 
         try:
-            response = self.client.chat.completions.create(
-                model="deepseek-chat",
+            resp = await complete(
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": f"原文：{context}\n\n待清洗文本：{text}"}
@@ -397,7 +385,7 @@ class LLMSubtitleProcessor:
                 temperature=0.1,  # 降低随机性
             )
 
-            cleaned_text = response.choices[0].message.content.strip()
+            cleaned_text = resp.content.strip()
 
             return cleaned_text
 
@@ -456,8 +444,7 @@ class LLMSubtitleProcessor:
 请纠正上述字幕中的识别错误，保持原意不变。"""
 
             try:
-                response = self.client.chat.completions.create(
-                    model="deepseek-chat",
+                resp = await complete(
                     messages=[
                         {
                             "role": "system",
@@ -476,7 +463,7 @@ class LLMSubtitleProcessor:
 - 保持原意不变
 - 输出必须保持相同的行数
 
-输出格式（JSON）：
+输出格式（JSON）:
 {
   "corrected": [
     "纠正后的第1条",
@@ -496,7 +483,7 @@ class LLMSubtitleProcessor:
                     response_format={"type": "json_object"}
                 )
 
-                result = _parse_llm_json(response.choices[0].message.content, context="correct_batch")
+                result = _parse_llm_json(resp.content, context="correct_batch")
                 corrected_texts = result.get("corrected", [])
 
                 # 验证数量
@@ -567,8 +554,7 @@ class LLMSubtitleProcessor:
 请严格按照 JSON 格式输出，提取 3-5 个最有价值的金句。"""
 
         try:
-            response = self.client.chat.completions.create(
-                model="deepseek-chat",
+            resp = await complete(
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": transcript}
@@ -577,7 +563,7 @@ class LLMSubtitleProcessor:
                 response_format={"type": "json_object"}
             )
 
-            result = _parse_llm_json(response.choices[0].message.content, context="llm_call")
+            result = _parse_llm_json(resp.content, context="llm_call")
 
             return {
                 "episode_id": episode_id,
