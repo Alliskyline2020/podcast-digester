@@ -31,20 +31,18 @@ class Settings:
             str(Path(__file__).parent.parent.parent / "data")
         ))
 
-        # ==================== DeepSeek API ====================
-        self.deepseek_api_key = os.getenv("DEEPSEEK_API_KEY", "")
-        self.deepseek_base_url = os.getenv(
-            "DEEPSEEK_BASE_URL",
-            "https://api.deepseek.com/v1"
+        # ==================== LLM API ====================
+        # 统一多 provider 配置。LLM_* 为正式变量；DEEPSEEK_* 为向后兼容别名
+        # （单用户自托管，不复用 key）。实际读取/校验/SSRF 守卫在 app/llm/config.py:get_config()。
+        # 这里仅保留旧 Settings 字段供历史代码引用 + 别名映射。
+        self.llm_provider = os.getenv("LLM_PROVIDER", "deepseek")
+        self.llm_provider_type = os.getenv("LLM_PROVIDER_TYPE", "")
+        # API key / base_url / model：LLM_* 优先，回退 DEEPSEEK_* 别名
+        self.deepseek_api_key = os.getenv("LLM_API_KEY") or os.getenv("DEEPSEEK_API_KEY", "")
+        self.deepseek_base_url = (
+            os.getenv("LLM_BASE_URL") or os.getenv("DEEPSEEK_BASE_URL", "")
         )
-        # DeepSeek V4 (2026-04):
-        # - deepseek-chat = V4 Flash non-thinking(快+省,用于翻译/分段/摘要/字幕优化等简单任务)
-        # - deepseek-v4-flash = V4 Flash thinking(推理,用于金句/洞察等复杂任务)
-        # - deepseek-v4-pro = 旗舰(最高质量)
-        # 默认 non-thinking:大部分任务不需要 reasoning,non-thinking 更快更省
-        # (thinking 的 reasoning_tokens 会占用 max_tokens 预算)。
-        # 需要推理的任务(金句提取/章节排序/洞察)在 chat_json 调用时显式传 model。
-        self.deepseek_model = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+        self.deepseek_model = os.getenv("LLM_MODEL") or os.getenv("DEEPSEEK_MODEL", "")
 
         # ==================== Whisper ASR 配置 ====================
         self.whisper_model = os.getenv("PODCAST_DIGESTER_WHISPER_MODEL", "small")
@@ -69,12 +67,6 @@ class Settings:
         self.llm_max_retries = int(os.getenv("PODCAST_DIGESTER_LLM_MAX_RETRIES", "3"))
         self.llm_base_delay = float(os.getenv("PODCAST_DIGESTER_LLM_BASE_DELAY", "1.0"))
         self.llm_max_delay = float(os.getenv("PODCAST_DIGESTER_LLM_MAX_DELAY", "60.0"))
-
-        # ==================== 成本配置（元 per 1M tokens） ====================
-        self.llm_cost_per_token = {
-            "deepseek-chat": {"input": 0.00014, "output": 0.00028},
-            "deepseek-reasoner": {"input": 0.00055, "output": 0.00219},
-        }
 
         # ==================== Worker 配置 ====================
         self.worker_poll_interval_seconds = int(os.getenv("PODCAST_DIGESTER_WORKER_POLL_INTERVAL", "5"))
@@ -191,23 +183,6 @@ def is_development() -> bool:
     return settings.environment == "development"
 
 
-def calculate_llm_cost(model: str, prompt_tokens: int, completion_tokens: int) -> float:
-    """计算 LLM 调用成本（美元）
-
-    Args:
-        model: 模型名称
-        prompt_tokens: 输入 token 数
-        completion_tokens: 输出 token 数
-
-    Returns:
-        成本（美元）
-    """
-    rates = settings.llm_cost_per_token.get(model, settings.llm_cost_per_token["deepseek-chat"])
-    input_cost = (prompt_tokens / 1_000_000) * rates["input"]
-    output_cost = (completion_tokens / 1_000_000) * rates["output"]
-    return input_cost + output_cost
-
-
 def calculate_overall_progress(current_stage: str, stage_progress: float) -> float:
     """计算总体进度（0-1）
 
@@ -244,9 +219,12 @@ def validate_config() -> None:
     """验证配置有效性"""
     errors = []
 
-    # 验证必需的API密钥
-    if not settings.deepseek_api_key or settings.deepseek_api_key == "sk-your-api-key-here":
-        errors.append("DEEPSEEK_API_KEY must be set")
+    # 验证 LLM 配置（统一校验：API key / base_url SSRF 守卫等）
+    from .llm.config import get_config
+    try:
+        get_config()
+    except ValueError as e:
+        errors.append(f"LLM config invalid: {e}")
 
     # 验证数据目录可写
     try:

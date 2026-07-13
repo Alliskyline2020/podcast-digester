@@ -15,7 +15,6 @@ from . import (
     extract_highlights,
 )
 from ..utils.io import atomic_write_json
-from ..config import DEEPSEEK_MODEL
 
 
 logger = logging.getLogger(__name__)

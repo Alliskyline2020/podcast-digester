@@ -433,7 +433,7 @@ class CostLog(BaseModel):
     id: int
     ts: datetime = Field(default_factory=datetime.now)
     task: str = Field(..., description="chapterize/summarize/translate/highlight/verify")
-    model: str = Field(..., description="deepseek-chat")
+    model: str = Field(..., description="configured LLM model id")
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
