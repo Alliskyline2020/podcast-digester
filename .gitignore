@@ -114,9 +114,14 @@ backend/data/
 *.mp4
 *.vtt
 
-# Apple AFM ASR 缓存
+# Apple AFM ASR 桥接工具：编译产物不入库（用 tools/build_apple_asr.sh 从 .swift 源码构建）
+backend/app/speech_analyzer_bridge
 backend/app/speech_analyzer_bridge/.build/
 backend/app/speech_analyzer_bridge/.swiftpm/
+
+# tools/ 下的临时探查脚本（非测试套件；真实测试在 backend/tests/，留磁盘参考但不入库）
+backend/tools/test_*.py
+backend/tools/quick_verify.py
 
 # Plans / 临时输出（保留 docs/）
 *.tmp

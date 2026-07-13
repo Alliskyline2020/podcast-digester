@@ -8,6 +8,9 @@ from pathlib import Path
 import sys
 import subprocess
 
+# 仓库相对路径，避免硬编码本机绝对路径（移植到其他机器/CI 仍可用）
+BACKEND_DIR = Path(__file__).resolve().parent.parent
+
 
 def test_apple_asr_availability():
     """测试Apple ASR是否可用"""
@@ -31,7 +34,7 @@ def test_apple_asr_availability():
 
 def test_apple_asr_module():
     """测试Apple ASR模块导入"""
-    sys.path.insert(0, '/Users/alli/podcast-digester/backend')
+    sys.path.insert(0, str(BACKEND_DIR))
 
     try:
         from app.asr_afm3 import AppleASR, get_apple_asr
@@ -52,10 +55,10 @@ def test_apple_asr_module():
 
 def test_pipeline_integration():
     """测试pipeline是否使用Apple ASR"""
-    sys.path.insert(0, '/Users/alli/podcast-digester/backend')
+    sys.path.insert(0, str(BACKEND_DIR))
 
     # 读取整个pipeline文件
-    pipeline_file = Path('/Users/alli/podcast-digester/backend/app/pipeline.py')
+    pipeline_file = BACKEND_DIR / 'app' / 'pipeline.py'
     source = pipeline_file.read_text()
 
     # 验证使用了asr_afm3
@@ -68,7 +71,7 @@ def test_pipeline_integration():
 
 def test_whisper_removed():
     """测试Whisper是否已完全移除"""
-    sys.path.insert(0, '/Users/alli/podcast-digester/backend')
+    sys.path.insert(0, str(BACKEND_DIR))
 
     # 测试主pipeline不依赖Whisper
     from app.pipeline import AudioProcessPipeline
