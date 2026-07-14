@@ -301,8 +301,40 @@ async def test_batch_sync_subtitles_large_segments(temp_db, temp_data_dir) -> No
 
 
 @pytest.mark.asyncio
-async def test_batch_sync_subtitles_performance(temp_db, temp_data_dir) -> None:
-    """测试批量字幕同步 - 性能验证"""
+async def test_batch_sync_subtitles_performance(temp_db, temp_data_dir, monkeypatch) -> None:
+    """测试批量字幕同步 - 10个节目全部成功（mock LLM，确定性、无网络）。
+
+    原 <20s 计时断言在真实 DeepSeek 下受网络抖动影响而 flaky。改为 mock 分段调用后，
+    该测试聚焦批量处理正确性（total/successful/failed）；真实 LLM 集成由
+    test_subtitle_sync_api.py 覆盖。
+    """
+    # Mock 分段 LLM：2 段 → 1 段落，不走真实 DeepSeek（确定性、免费、无网络抖动）。
+    from app.llm.protocols import LLMResponse
+    import app.services.llm_subtitle_processor as lsp
+
+    _canned = json.dumps({
+        "paragraphs": [{
+            "id": 0,
+            "start_index": 0,
+            "end_index": 1,
+            "start_time": "00:00.000",
+            "end_time": "00:10.000",
+            "content": "Sentence one. Sentence two.",
+            "reasoning": "test",
+        }]
+    })
+
+    async def _fake_complete(*args, **kwargs) -> LLMResponse:
+        return LLMResponse(
+            content=_canned,
+            model="deepseek-chat",
+            usage={"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+            finish_reason="stop",
+            cost_usd=0.0,
+        )
+
+    monkeypatch.setattr(lsp, "complete", _fake_complete)
+
     # Arrange - 创建10个节目
     episode_ids = [f"ep_test_perf_{i}" for i in range(10)]
     
@@ -348,8 +380,7 @@ async def test_batch_sync_subtitles_performance(temp_db, temp_data_dir) -> None:
     assert len(data["successful"]) == 10
     assert len(data["failed"]) == 0
     
-    # 验证性能 - 10个节目应该在合理时间内完成（LLM处理需要更多时间）
-    # 使用LLM分段时，10个外部API调用需要15-20秒
+    # 批量处理10个节目应在合理时间内完成（mock 后无网络，近瞬时）
     assert data["duration_ms"] < 20000
 
 

@@ -36,6 +36,14 @@ def test_apple_asr_module():
     """测试Apple ASR模块导入"""
     sys.path.insert(0, str(BACKEND_DIR))
 
+    # speech_analyzer_bridge 是 gitignored 的构建产物；未编译时跳过而非让套件失败。
+    # 重新构建：cd backend/tools && ./build_apple_asr.sh
+    bridge = BACKEND_DIR / "app" / "speech_analyzer_bridge"
+    if not bridge.exists():
+        pytest.skip(
+            f"Swift桥接工具未编译: {bridge}（运行 cd backend/tools && ./build_apple_asr.sh）"
+        )
+
     try:
         from app.asr_afm3 import AppleASR, get_apple_asr
         print("✅ Apple ASR模块导入成功")
