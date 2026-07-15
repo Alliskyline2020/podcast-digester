@@ -4,6 +4,7 @@ import pytest
 from app.llm.config import (
     PROVIDERS, get_config, infer_provider_type, LLMConfig, _resolve_config,
     provider_base_url_editable, resolve_effective_base_url,
+    _assert_public_https_base_url,
 )
 
 
@@ -74,64 +75,111 @@ def test_missing_api_key_raises(clean_llm_env):
         get_config()
 
 
-def test_ssrf_guard_blocks_localhost(clean_llm_env, monkeypatch):
-    monkeypatch.setenv("LLM_API_KEY", "sk-x")
-    monkeypatch.setenv("LLM_BASE_URL", "http://127.0.0.1:8080")
+# ==================== SSRF 守卫原语（_assert_public_https_base_url）====================
+# 守卫函数本身的行为：http 拒、内网拒、云元数据拒、字面量 IP 直接分类不经 DNS。
+# 直接测原语（不再绕 get_config 热路径，热路径的来源信任见下方分区）。
+
+def test_ssrf_guard_rejects_http():
+    with pytest.raises(ValueError, match="必须"):
+        _assert_public_https_base_url("http://127.0.0.1:8080")
+
+
+def test_ssrf_guard_blocks_localhost():
     with pytest.raises(ValueError, match="base_url"):
-        get_config()
+        _assert_public_https_base_url("https://127.0.0.1")
 
 
-def test_ssrf_guard_blocks_private_range(clean_llm_env, monkeypatch):
-    monkeypatch.setenv("LLM_API_KEY", "sk-x")
-    monkeypatch.setenv("LLM_BASE_URL", "https://192.168.1.5")
+def test_ssrf_guard_blocks_private_range():
     with pytest.raises(ValueError, match="base_url"):
-        get_config()
+        _assert_public_https_base_url("https://192.168.1.5")
 
 
-def test_ssrf_guard_allows_public_https(clean_llm_env, monkeypatch):
-    monkeypatch.setenv("LLM_API_KEY", "sk-x")
-    monkeypatch.setenv("LLM_BASE_URL", "https://8.8.8.8")
-    cfg = get_config()  # 不抛
-    assert cfg.base_url == "https://8.8.8.8"
+def test_ssrf_guard_allows_public_literal_ip():
+    _assert_public_https_base_url("https://8.8.8.8")  # 不抛
 
 
-# ==================== SSRF 加固：云元数据 / 字面量 IP（防重定向外的补充）====================
-
-def test_ssrf_guard_blocks_alibaba_metadata(clean_llm_env, monkeypatch):
+def test_ssrf_guard_blocks_alibaba_metadata():
     # 阿里云 ECS 元数据 100.100.100.200：is_private 不覆盖，须显式拒绝
-    monkeypatch.setenv("LLM_API_KEY", "sk-x")
-    monkeypatch.setenv("LLM_BASE_URL", "https://100.100.100.200")
     with pytest.raises(ValueError, match="base_url"):
-        get_config()
+        _assert_public_https_base_url("https://100.100.100.200")
 
 
-def test_ssrf_guard_blocks_cgnat_range(clean_llm_env, monkeypatch):
+def test_ssrf_guard_blocks_cgnat_range():
     # RFC 6598 CGNAT 100.64.0.0/10：is_private 不覆盖，须显式拒绝
-    monkeypatch.setenv("LLM_API_KEY", "sk-x")
-    monkeypatch.setenv("LLM_BASE_URL", "https://100.64.10.20")
     with pytest.raises(ValueError, match="base_url"):
-        get_config()
+        _assert_public_https_base_url("https://100.64.10.20")
 
 
-def test_ssrf_guard_blocks_suspicious_ip_literal(clean_llm_env, monkeypatch):
-    # 0177.0.0.1 这类带前导零的「伪字面量」：getaddrinfo 会当成公网 177.0.0.1 放行，
-    # 但 httpx 可能按八进制解析 → guard 与客户端解析不一致的隐患，直接拒。
-    monkeypatch.setenv("LLM_API_KEY", "sk-x")
-    monkeypatch.setenv("LLM_BASE_URL", "https://0177.0.0.1")
+def test_ssrf_guard_blocks_suspicious_ip_literal():
+    # 0177.0.0.1 带前导零的伪字面量：getaddrinfo 可能当公网放行、与 httpx 口径不一 → 拒
     with pytest.raises(ValueError, match="base_url"):
-        get_config()
+        _assert_public_https_base_url("https://0177.0.0.1")
 
 
-def test_ssrf_guard_literal_ip_skips_dns(clean_llm_env, monkeypatch):
-    # 字面量公网 IP 不走 DNS：消除 check / use 之间的 rebinding 窗口
+def test_ssrf_guard_literal_ip_skips_dns(monkeypatch):
+    # 字面量公网 IP 不走 DNS：消除 check/use 间的 rebinding 窗口
     import app.llm.config as cfgmod
     def _boom(*a, **k):
         raise OSError("字面量 IP 不应触发 DNS 解析")
     monkeypatch.setattr(cfgmod.socket, "getaddrinfo", _boom)
+    _assert_public_https_base_url("https://8.8.8.8")  # 不抛，且不调 getaddrinfo
+
+
+# ==================== 热路径来源信任模型（_resolve_config）====================
+# 守卫只在「写入端」(PUT /api/admin/llm-config) + 热路径的 DB 覆写来源生效；
+# env LLM_BASE_URL 视为运维可信（逃生舱：企业代理/镜像网关，可为内网/http）→ 放行；
+# 热路径守卫结果按 base_url 记忆化，避免每次请求重复阻塞 DNS。
+
+def test_env_base_url_trusted_internal_allowed(clean_llm_env, monkeypatch):
+    # env 填内网地址：运维逃生舱，热路径不再守卫 → 放行
     monkeypatch.setenv("LLM_API_KEY", "sk-x")
-    monkeypatch.setenv("LLM_BASE_URL", "https://8.8.8.8")
-    cfg = get_config()  # 不抛，且不调 getaddrinfo
+    monkeypatch.setenv("LLM_BASE_URL", "https://192.168.1.5")
+    cfg = get_config()
+    assert cfg.base_url == "https://192.168.1.5"
+
+
+def test_env_base_url_trusted_http_allowed(clean_llm_env, monkeypatch):
+    # env 填 http 本机：运维可信放行（原语本会拒 http，但 env 不过原语）
+    monkeypatch.setenv("LLM_API_KEY", "sk-x")
+    monkeypatch.setenv("LLM_BASE_URL", "http://127.0.0.1:8080")
+    cfg = get_config()
+    assert cfg.base_url == "http://127.0.0.1:8080"
+
+
+@pytest.mark.database
+async def test_db_override_base_url_is_guarded(override_env, monkeypatch):
+    # DB 覆写（设置页填入）= 不可信来源 → 热路径守卫仍生效
+    monkeypatch.setenv("LLM_API_KEY", "sk-x")
+    from app.llm.runtime_config import write_runtime_override
+    await write_runtime_override({"base_url": "https://192.168.1.5"})
+    with pytest.raises(ValueError, match="base_url"):
+        get_config()
+
+
+@pytest.mark.database
+async def test_db_override_public_base_url_allowed(override_env, monkeypatch):
+    # DB 覆写公网地址 → 守卫放行
+    monkeypatch.setenv("LLM_API_KEY", "sk-x")
+    from app.llm.runtime_config import write_runtime_override
+    await write_runtime_override({"base_url": "https://8.8.8.8"})
+    cfg = get_config()
     assert cfg.base_url == "https://8.8.8.8"
+
+
+def test_ssrf_guard_memoized_skips_repeat_dns(monkeypatch):
+    # 热路径守卫记忆化：同一 base_url 第二次命中缓存，不再 DNS
+    import app.llm.config as cfgmod
+    monkeypatch.setattr(cfgmod, "_SSRF_VERIFIED_URLS", set())
+    calls = {"n": 0}
+
+    def _fake_resolve(host, *a, **k):
+        calls["n"] += 1
+        return [(0, 0, 0, "", ("1.2.3.4", 0))]  # 公网 IP，无需真实网络
+
+    monkeypatch.setattr(cfgmod.socket, "getaddrinfo", _fake_resolve)
+    cfgmod._assert_public_https_base_url_cached("https://api.example.com")
+    cfgmod._assert_public_https_base_url_cached("https://api.example.com")
+    assert calls["n"] == 1  # 第二次命中缓存
 
 
 # ==================== 运行时覆写测试 ====================

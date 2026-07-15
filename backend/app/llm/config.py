@@ -187,6 +187,20 @@ def _assert_public_https_base_url(base_url: str) -> None:
             raise ValueError(f"base_url 禁止指向内网/本机/元数据地址 {ip}：{base_url!r}")
 
 
+# 热路径守卫记忆化：同一 base_url 校验通过即缓存，避免每次 LLM 调用都重复一次
+# 阻塞的 getaddrinfo。仅缓存「通过」结果（不合法的会在入集合前抛 ValueError）；
+# 坏配置本就让请求失败，重复校验开销可忽略，故失败不缓存。
+_SSRF_VERIFIED_URLS: set[str] = set()
+
+
+def _assert_public_https_base_url_cached(base_url: str) -> None:
+    """_assert_public_https_base_url 的记忆化包装（供 _resolve_config 热路径用）。"""
+    if base_url in _SSRF_VERIFIED_URLS:
+        return
+    _assert_public_https_base_url(base_url)
+    _SSRF_VERIFIED_URLS.add(base_url)
+
+
 # ==================== 统一配置读取 ====================
 def _resolve_config(require_key: bool = True) -> LLMConfig:
     """解析 LLM 配置。
@@ -215,7 +229,8 @@ def _resolve_config(require_key: bool = True) -> LLMConfig:
     # base_url：DB 覽写 > LLM_* env > DEEPSEEK_* 别名 > 预设默认。
     # 注意：锁定型 provider 的「固定 url」只约束设置页 UI + PUT 写入；
     # 这里仍保留 LLM_BASE_URL 环境变量作为运维逃生舱（如企业代理/镜像网关）。
-    if "base_url" in override:
+    base_url_from_override = "base_url" in override
+    if base_url_from_override:
         base_url = override.get("base_url") or preset.get("default_base_url", "")
     else:
         base_url = (
@@ -242,7 +257,10 @@ def _resolve_config(require_key: bool = True) -> LLMConfig:
         raise ValueError(
             "LLM_API_KEY 未配置（也可用旧名 DEEPSEEK_API_KEY）。请在环境变量或设置页中设置。"
         )
-    _assert_public_https_base_url(base_url)
+    # 仅 DB 覆写来源（设置页用户输入）过 SSRF 守卫；env/预设视为运维可信放行。
+    # 用记忆化版本，避免热路径每次请求都重复一次阻塞的 getaddrinfo。
+    if base_url_from_override and base_url:
+        _assert_public_https_base_url_cached(base_url)
 
     return LLMConfig(
         provider=provider,
