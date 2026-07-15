@@ -83,3 +83,39 @@ async def complete(
             response_format=response_format,
         )
     )
+
+
+def _humanize_llm_error(err: Exception) -> str:
+    """把 SDK/网络错误翻译成给用户看的一句话。"""
+    s = str(err).lower()
+    if "401" in s or "invalid api key" in s or "unauthorized" in s:
+        return "API Key 无效或未授权（401）"
+    if "403" in s or "forbidden" in s:
+        return "拒绝访问（403），可能是 Key 无该模型权限"
+    if "404" in s or "model" in s and "not found" in s:
+        return "模型名或端点不对（404）"
+    if "timeout" in s or "timed out" in s:
+        return "请求超时（检查网络或 base_url 是否可达）"
+    if "connection" in s or "name or service" in s or "getaddrinfo" in s:
+        return "无法连接到该 API 地址（域名不通 / base_url 错误）"
+    return f"请求失败：{err}"
+
+
+async def ping_llm(cfg: LLMConfig) -> tuple[bool, str]:
+    """用给定配置发一个极小请求，验证 key/端点/模型可用。
+
+    用传入的 cfg（而非 get_config()），这样能测「未保存的草稿值」。
+    返回 (ok, 中文说明)。
+    """
+    adapter = _get_adapter(cfg, min(cfg.timeout, 15.0))
+    try:
+        resp = await adapter.complete(
+            model=cfg.model,
+            messages=[{"role": "user", "content": "ping"}],
+            temperature=0.0,
+            max_tokens=5,
+            response_format=None,
+        )
+        return True, f"连通（模型 {resp.model}）"
+    except Exception as e:
+        return False, _humanize_llm_error(e)
