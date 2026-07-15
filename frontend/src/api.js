@@ -306,3 +306,46 @@ export async function deleteGlossaryEntry(correct) {
   if (!res.ok) throw new Error('删除词库条目失败')
   return await res.json()
 }
+
+/**
+ * 获取当前 LLM 配置（api_key 掩码）+ provider 预设列表
+ * @returns {Promise<{provider,provider_type,base_url,model,has_api_key,api_key_masked,providers}>}
+ */
+export async function getLlmConfig() {
+  const res = await fetchWithTimeout(`${API_BASE}/admin/llm-config`)
+  if (!res.ok) throw new Error('获取 LLM 配置失败')
+  return await res.json()
+}
+
+/**
+ * 保存 LLM 配置。未改的字段（如 api_key）不要传。
+ * @param {Object} cfg - { provider?, provider_type?, api_key?, base_url?, model? }
+ */
+export async function saveLlmConfig(cfg) {
+  const res = await fetchWithTimeout(`${API_BASE}/admin/llm-config`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(cfg),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || '保存失败')
+  }
+  return await res.json()
+}
+
+/**
+ * 测试连接（用当前表单值，无需先保存）。
+ * @param {Object} cfg - 同 saveLlmConfig
+ * @returns {Promise<{ok:boolean, detail:string}>}
+ */
+export async function testLlmConfig(cfg) {
+  // 真实 LLM 调用，给 20s 余量
+  const res = await fetchWithTimeout(`${API_BASE}/admin/llm-config/test`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(cfg),
+  }, 20000)
+  if (!res.ok) throw new Error('测试请求失败')
+  return await res.json()
+}
