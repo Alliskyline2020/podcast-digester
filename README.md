@@ -12,7 +12,7 @@
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white)
 ![Vue](https://img.shields.io/badge/Vue-3-42b883?logo=vuedotjs&logoColor=white)
 ![LLM](https://img.shields.io/badge/LLM-多Provider-8A2BE2)
-![Tests](https://img.shields.io/badge/Tests-392%20passed-brightgreen)
+![Tests](https://img.shields.io/badge/Tests-441%20passed-brightgreen)
 ![License](https://img.shields.io/badge/License-MIT-blue)
 ![Status](https://img.shields.io/badge/Status-个人项目%20·%20活跃迭代-orange)
 
@@ -100,21 +100,34 @@
 - `openai_compatible` —— `openai.AsyncOpenAI` 包装，覆盖 DeepSeek / OpenAI / GLM / 通义 / 豆包 / Kimi 等 OpenAI 兼容端点
 - `anthropic_compatible` —— `anthropic.AsyncAnthropic` 包装，覆盖 Claude 系列
 
-切换 provider 只改环境变量，**不改一行代码**。
+### 两种配置方式
+
+**方式 A · 设置页（推荐，零代码）** —— 启动后点右上角齿轮进入「设置」：
+
+- 厂商按 **国内 / 国际** 分组下拉；选中即带出默认端点与模型
+- 填入 API Key（保存后仅以 `****` + 末 4 位回显，永不完整返回）
+- 兼容自定义端点可填 `base_url`，并一键**拉取该端点可用模型**；命名厂商端点已锁定，不可改
+- 「测试连接」用未保存的草稿值发一个极小请求，验证 Key / 端点 / 模型
+- 保存写入 SQLite，**API 与 Worker 即时热加载**，无需重启
+
+**方式 B · 环境变量** —— 见下方切换示例（适合脚本 / 无 UI 部署 / CI）。切换 provider 只改环境变量，**不改一行代码**。
 
 ### 支持的 Provider 预设
 
-| `LLM_PROVIDER` | 协议 (`provider_type`) | 默认端点 | 默认模型 | 备注 |
-|----------------|------------------------|----------|----------|------|
-| `deepseek` | `openai_compatible` | `api.deepseek.com` | `deepseek-chat` | 推荐，性价比高 |
-| `openai` | `openai_compatible` | SDK 官方默认 | `gpt-4o-mini` | OpenAI 官方 |
-| `anthropic` | `anthropic_compatible` | SDK 官方默认 | `claude-3-5-sonnet-latest` | Claude 系列 |
-| `glm` | `openai_compatible` | `open.bigmodel.cn/api/paas/v4` | `glm-4-flash` | 智谱 |
-| `qwen` | `openai_compatible` | `dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` | 通义千问 |
-| `doubao` | `openai_compatible` | `ark.cn-beijing.volces.com/api/v3` | *（自填）* | 字节豆包，模型 id 实为 endpoint id |
-| `moonshot` | `openai_compatible` | `api.moonshot.cn/v1` | `moonshot-v1-8k` | 月之暗面 Kimi |
-| `openai-compatible` | `openai_compatible` | 自填 | 自填 | 任意 OpenAI 兼容端点 |
-| `anthropic-compatible` | `anthropic_compatible` | 自填 | 自填 | 任意 Anthropic 兼容端点 |
+| `LLM_PROVIDER` | 地区 | 协议 (`provider_type`) | 默认端点 | 默认模型 | 备注 |
+|----------------|:--:|------------------------|----------|----------|------|
+| `deepseek` | 国内 | `openai_compatible` | `api.deepseek.com` | `deepseek-chat` | 推荐，性价比高 |
+| `glm` | 国内 | `openai_compatible` | `open.bigmodel.cn/api/paas/v4` | `glm-4-flash` | 智谱标准端点 |
+| `glm-coding` | 国内 | `openai_compatible` | `open.bigmodel.cn/api/coding/paas/v4` | *（拉取后选）* | 智谱编码套件专用端点 |
+| `qwen` | 国内 | `openai_compatible` | `dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` | 通义千问 |
+| `doubao` | 国内 | `openai_compatible` | `ark.cn-beijing.volces.com/api/v3` | *（自填）* | 字节豆包，模型 id 实为 endpoint id |
+| `moonshot` | 国内 | `openai_compatible` | `api.moonshot.cn/v1` | `moonshot-v1-8k` | 月之暗面 Kimi |
+| `openai` | 国际 | `openai_compatible` | SDK 官方默认 | `gpt-4o-mini` | OpenAI 官方 |
+| `anthropic` | 国际 | `anthropic_compatible` | SDK 官方默认 | `claude-3-5-sonnet-latest` | Claude 系列 |
+| `openai-compatible` | — | `openai_compatible` | 自填 | 自填 | 任意 OpenAI 兼容端点 |
+| `anthropic-compatible` | — | `anthropic_compatible` | 自填 | 自填 | 任意 Anthropic 兼容端点 |
+
+> **base_url 锁定**：命名厂商（上表前 8 个）端点固定为预设值、不可改；底部两个「兼容自定义端点」可自由填 `base_url`。不同端点 / 套餐已拆成独立 provider（如 GLM 标准端点 vs 编码套件端点）。
 
 ### 切换示例（`.env`）
 
@@ -129,11 +142,6 @@ LLM_PROVIDER=anthropic
 LLM_API_KEY=sk-ant-xxxxxxxx
 LLM_MODEL=claude-3-5-sonnet-latest
 
-# —— 智谱 GLM ——
-LLM_PROVIDER=glm
-LLM_API_KEY=xxxxxxxx
-LLM_MODEL=glm-4-flash
-
 # —— 任意自建 / 第三方 OpenAI 兼容端点 ——
 LLM_PROVIDER=openai-compatible
 LLM_PROVIDER_TYPE=openai_compatible   # 通用兜底需显式指定协议
@@ -142,9 +150,9 @@ LLM_API_KEY=xxxxxxxx
 LLM_MODEL=your-model
 ```
 
-> **配置优先级**：`LLM_*` > `DEEPSEEK_*`（向后兼容别名）> `PROVIDERS[provider]` 预设默认值。
+> **配置优先级**：设置页（运行时覆写）> `LLM_*` > `DEEPSEEK_*`（向后兼容别名）> `PROVIDERS[provider]` 预设默认。
 >
-> **SSRF 守卫**：`LLM_BASE_URL` 必须是 `https://`，且禁止指向 `.local` / 内网 / 本机地址（LLM 密钥不可明文走 http 或内网）。详见 `app/llm/config.py`。
+> **安全**：设置页填入的 `base_url` 经 SSRF 守卫（必须 `https://`，禁内网 / 本机 / 云元数据 / CGNAT），且 SDK 关闭重定向跟随以防密钥经跳转泄露；密钥仅从环境变量 / 设置页读取、永不完整回传。`LLM_BASE_URL` 环境变量作为运维逃生舱（企业代理 / 镜像网关，可为内网地址）视为可信、不经守卫。详见 `app/llm/config.py`。
 
 ## 📥 多源支持
 
@@ -222,10 +230,13 @@ cd ../frontend && npm install
 
 ### 3. 配置 LLM
 
-编辑 `backend/.env`，至少填入密钥（默认 `provider=deepseek`）：
+两种方式（任选其一）：
+
+- **设置页（推荐）**：启动后点右上角齿轮，在「设置」页选厂商（国内 / 国际分组）、填 API Key、按需**拉取模型 / 测试连接**后保存，**不用碰 `.env`**。
+- **环境变量**：编辑 `backend/.env`，至少填入密钥（默认 `provider=deepseek`），想换厂商见上方「可插拔 LLM」。
 
 ```bash
-LLM_API_KEY=sk-xxxxxxxx        # 你的 DeepSeek / OpenAI / Claude / GLM … 密钥
+LLM_API_KEY=sk-xxxxxxxx        # 走环境变量方式时填；你的 DeepSeek / OpenAI / Claude / GLM … 密钥
 # 想换 provider 见上方「可插拔 LLM」的切换示例
 ```
 
@@ -290,23 +301,24 @@ podcast-digester/
 │   │   ├── pipeline.py          # 8 阶段 Pipeline 编排（可断点续跑）
 │   │   ├── database.py          # SQLite 异步仓储 + 状态机
 │   │   ├── asr_afm3.py          # Apple AFM 3 语音识别封装
+│   │   ├── routers/             # FastAPI 路由层（含设置页 LLM 配置端点）
 │   │   ├── llm/                 # 多 Provider 适配层（complete() 统一入口）
 │   │   │   ├── client.py        #   统一分发：按 provider_type 选 adapter
 │   │   │   ├── protocols.py     #   OpenAI / Anthropic adapter
-│   │   │   ├── config.py        #   PROVIDERS 预设 + get_config + SSRF 守卫
+│   │   │   ├── config.py        #   PROVIDERS 预设 + get_config + SSRF 守卫（按来源分流信任）
 │   │   │   └── cost.py          #   按 provider/模型 的价格表（成本估算）
 │   │   ├── sources/             # 各平台解析器（youtube/bilibili/douyin/xiaoyuzhou/local）
 │   │   ├── services/            # 字幕对齐 / 润色 / 段落映射等业务
 │   │   ├── llm_pipeline/        # LLM 蒸馏任务：分章 / 摘要 / 翻译 / 亮点 / 洞察
 │   │   └── utils/               # cookie / 视频标题 / 校验等工具
-│   ├── tests/                   # pytest（单元 + 集成，392 用例）
+│   ├── tests/                   # pytest（单元 + 集成，441 用例）
 │   └── requirements.txt
 ├── frontend/
 │   ├── src/
-│   │   ├── views/               # LibraryView（节目库）/ PlayerView（播放器）
+│   │   ├── views/               # LibraryView（节目库）/ PlayerView（播放器）/ SettingsView（设置）
 │   │   ├── components/          # UI 组件
 │   │   └── utils/               # 阶段进度 / 格式化等
-│   └── tests/                   # Vitest
+│   └── tests/                   # Vitest（117 用例）
 ├── data/                        # SQLite + media/ep_*（gitignore，不入库）
 ├── docs/                        # 字幕校正指南
 └── start.sh / stop.sh           # 一键启停
@@ -315,13 +327,13 @@ podcast-digester/
 ## 🧪 测试
 
 ```bash
-# 后端（392 用例，含 unit / integration / api / database / llm 标记）
+# 后端（441 用例，含 unit / integration / api / database / llm 标记）
 cd backend && source venv/bin/activate && pytest tests
 
 # 只跑单元测试（快、无网络）
 pytest tests -m unit
 
-# 前端
+# 前端（117 用例）
 cd frontend && npm test
 ```
 
@@ -329,7 +341,7 @@ cd frontend && npm test
 
 - **本地优先**：音频与所有蒸馏产物都落在本机磁盘；只有 LLM 调用、平台抓取、（无字幕时的）语音识别走网络。
 - **成本可控**：单集 LLM 花费超过 `PODCAST_DIGESTER_MAX_LLM_COST`（默认 $5）自动中止；`app/llm/cost.py` 按 provider / 模型估算每次调用成本。
-- **密钥安全**：LLM 密钥仅从环境变量读取，`base_url` 经 SSRF 守卫，禁止 http / 内网 / 本机端点。
+- **密钥安全**：LLM 密钥从环境变量或设置页读取、永不完整回传（仅 `****` + 末 4 位）；设置页填入的 `base_url` 经 SSRF 守卫（禁 http / 内网 / 本机 / 云元数据），SDK 关闭重定向跟随防泄露。
 
 ## 🛣️ 路线图
 
@@ -338,6 +350,7 @@ cd frontend && npm test
 - [x] 双语字幕（`text_zh` / `text_en`）与点击跳转
 - [x] 反爬鉴权（B 站 cookie、无字幕 fail-fast）
 - [x] 可插拔多 Provider LLM（DeepSeek / OpenAI / Claude / GLM / 通义 / 豆包 / Kimi）
+- [x] 设置页图形化配置 LLM（国内/国际分组 · base_url 锁定 · 模型自动拉取 · 测试连接）
 - [ ] 更多平台（Twitter/X、TikTok）
 - [ ] 全文检索 / 跨集知识图谱
 - [ ] 移动端适配

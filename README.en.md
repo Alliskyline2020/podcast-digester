@@ -12,7 +12,7 @@ A local-first, single-user tool built for high-density information consumers —
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white)
 ![Vue](https://img.shields.io/badge/Vue-3-42b883?logo=vuedotjs&logoColor=white)
 ![LLM](https://img.shields.io/badge/LLM-Multi--Provider-8A2BE2)
-![Tests](https://img.shields.io/badge/Tests-392%20passed-brightgreen)
+![Tests](https://img.shields.io/badge/Tests-441%20passed-brightgreen)
 ![License](https://img.shields.io/badge/License-MIT-blue)
 ![Status](https://img.shields.io/badge/Status-Personal%20·%20Active-orange)
 
@@ -100,21 +100,34 @@ All distill stages (polish / translate / chapterize / summarize / highlight / in
 - `openai_compatible` — wraps `openai.AsyncOpenAI`; covers DeepSeek / OpenAI / GLM / Qwen / Doubao / Kimi and other OpenAI-compatible endpoints
 - `anthropic_compatible` — wraps `anthropic.AsyncAnthropic`; covers the Claude family
 
-Switching providers is just an env-var change — **no code changes.**
+### Two ways to configure
+
+**Option A · Settings page (recommended, zero code)** — after launch, click the gear icon to open **Settings**:
+
+- Providers grouped by **domestic / overseas** in a dropdown; selecting one pre-fills the default endpoint and model
+- Enter your API Key (saved value echoes back only as `****` + last 4, never in full)
+- Custom-compatible endpoints let you set `base_url` and **fetch the models that endpoint exposes in one click**; named-vendor endpoints are locked and cannot be changed
+- **Test connection** sends a tiny request with the unsaved draft values to verify Key / endpoint / model
+- Saving writes to SQLite and **hot-reloads into both API and Worker** — no restart needed
+
+**Option B · Environment variables** — see the switching examples below (good for scripts / headless deploys / CI). Switching providers is just an env-var change — **no code changes.**
 
 ### Supported provider presets
 
-| `LLM_PROVIDER` | Protocol (`provider_type`) | Default endpoint | Default model | Notes |
-|----------------|----------------------------|------------------|---------------|-------|
-| `deepseek` | `openai_compatible` | `api.deepseek.com` | `deepseek-chat` | Recommended, great value |
-| `openai` | `openai_compatible` | SDK default | `gpt-4o-mini` | OpenAI official |
-| `anthropic` | `anthropic_compatible` | SDK default | `claude-3-5-sonnet-latest` | Claude family |
-| `glm` | `openai_compatible` | `open.bigmodel.cn/api/paas/v4` | `glm-4-flash` | Zhipu |
-| `qwen` | `openai_compatible` | `dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` | Tongyi Qianwen |
-| `doubao` | `openai_compatible` | `ark.cn-beijing.volces.com/api/v3` | *（fill in）* | ByteDance Doubao; the model id is an endpoint id |
-| `moonshot` | `openai_compatible` | `api.moonshot.cn/v1` | `moonshot-v1-8k` | Moonshot Kimi |
-| `openai-compatible` | `openai_compatible` | custom | custom | any OpenAI-compatible endpoint |
-| `anthropic-compatible` | `anthropic_compatible` | custom | custom | any Anthropic-compatible endpoint |
+| `LLM_PROVIDER` | Region | Protocol (`provider_type`) | Default endpoint | Default model | Notes |
+|----------------|:--:|----------------------------|------------------|---------------|-------|
+| `deepseek` | domestic | `openai_compatible` | `api.deepseek.com` | `deepseek-chat` | Recommended, great value |
+| `glm` | domestic | `openai_compatible` | `open.bigmodel.cn/api/paas/v4` | `glm-4-flash` | Zhipu standard endpoint |
+| `glm-coding` | domestic | `openai_compatible` | `open.bigmodel.cn/api/coding/paas/v4` | *（fetch then pick）* | Zhipu Coding-Plan dedicated endpoint |
+| `qwen` | domestic | `openai_compatible` | `dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` | Tongyi Qianwen |
+| `doubao` | domestic | `openai_compatible` | `ark.cn-beijing.volces.com/api/v3` | *（fill in）* | ByteDance Doubao; the model id is an endpoint id |
+| `moonshot` | domestic | `openai_compatible` | `api.moonshot.cn/v1` | `moonshot-v1-8k` | Moonshot Kimi |
+| `openai` | overseas | `openai_compatible` | SDK default | `gpt-4o-mini` | OpenAI official |
+| `anthropic` | overseas | `anthropic_compatible` | SDK default | `claude-3-5-sonnet-latest` | Claude family |
+| `openai-compatible` | — | `openai_compatible` | custom | custom | any OpenAI-compatible endpoint |
+| `anthropic-compatible` | — | `anthropic_compatible` | custom | custom | any Anthropic-compatible endpoint |
+
+> **base_url locking:** named vendors (the first 8 above) have a fixed preset endpoint that cannot be changed; the two "custom-compatible" rows at the bottom let you freely set `base_url`. Different endpoints / plans are split into separate providers (e.g. GLM standard vs Coding-Plan endpoint).
 
 ### Switching examples (`.env`)
 
@@ -129,11 +142,6 @@ LLM_PROVIDER=anthropic
 LLM_API_KEY=sk-ant-xxxxxxxx
 LLM_MODEL=claude-3-5-sonnet-latest
 
-# —— Zhipu GLM ——
-LLM_PROVIDER=glm
-LLM_API_KEY=xxxxxxxx
-LLM_MODEL=glm-4-flash
-
 # —— Any self-hosted / third-party OpenAI-compatible endpoint ——
 LLM_PROVIDER=openai-compatible
 LLM_PROVIDER_TYPE=openai_compatible   # generic presets need an explicit protocol
@@ -142,9 +150,9 @@ LLM_API_KEY=xxxxxxxx
 LLM_MODEL=your-model
 ```
 
-> **Config priority:** `LLM_*` > `DEEPSEEK_*` (backward-compat aliases) > `PROVIDERS[provider]` preset defaults.
+> **Config priority:** Settings page (runtime override) > `LLM_*` > `DEEPSEEK_*` (backward-compat aliases) > `PROVIDERS[provider]` preset defaults.
 >
-> **SSRF guard:** `LLM_BASE_URL` must be `https://`, and may not point at `.local` / private / loopback addresses (LLM keys must never travel over plain http or to an internal host). See `app/llm/config.py`.
+> **Security:** a `base_url` entered on the settings page passes an SSRF guard (must be `https://`, rejects internal / loopback / cloud-metadata / CGNAT), and the SDK disables redirect-following to prevent the key leaking via a redirect; the key is read only from env vars / the settings page and never returned in full. `LLM_BASE_URL` is an operator escape hatch (enterprise proxy / mirror gateway, may be an internal address) and is treated as trusted, bypassing the guard. See `app/llm/config.py`.
 
 ## 📥 Multi-source Support
 
@@ -222,10 +230,13 @@ cd ../frontend && npm install
 
 ### 3. Configure your LLM
 
-Edit `backend/.env` and fill in at least the key (default `provider=deepseek`):
+Two options (pick either):
+
+- **Settings page (recommended):** after launch, click the gear icon, pick a provider (domestic / overseas group), enter your API Key, optionally **fetch models / test connection**, then save — **no `.env` editing**.
+- **Environment variables:** edit `backend/.env` and fill in at least the key (default `provider=deepseek`); to switch providers, see "Switching examples" above.
 
 ```bash
-LLM_API_KEY=sk-xxxxxxxx        # your DeepSeek / OpenAI / Claude / GLM … key
+LLM_API_KEY=sk-xxxxxxxx        # only needed for the env-var option; your DeepSeek / OpenAI / Claude / GLM … key
 # to switch providers, see "Switching examples" above
 ```
 
@@ -290,23 +301,24 @@ podcast-digester/
 │   │   ├── pipeline.py          # 8-stage pipeline orchestration (resumable)
 │   │   ├── database.py          # SQLite async repository + state machine
 │   │   ├── asr_afm3.py          # Apple AFM 3 ASR wrapper
+│   │   ├── routers/             # FastAPI route layer (incl. settings-page LLM config endpoints)
 │   │   ├── llm/                 # multi-provider adapter layer (complete() entry)
 │   │   │   ├── client.py        #   unified dispatch by provider_type
 │   │   │   ├── protocols.py     #   OpenAI / Anthropic adapter
-│   │   │   ├── config.py        #   PROVIDERS presets + get_config + SSRF guard
+│   │   │   ├── config.py        #   PROVIDERS presets + get_config + SSRF guard (trust by source)
 │   │   │   └── cost.py          #   per-provider/model price table (cost estimate)
 │   │   ├── sources/             # per-platform handlers (youtube/bilibili/douyin/xiaoyuzhou/local)
 │   │   ├── services/            # subtitle alignment / polish / paragraph mapping
 │   │   ├── llm_pipeline/        # LLM distill tasks: chapter / summary / translate / highlight / insight
 │   │   └── utils/               # cookie / video-title / validation helpers
-│   ├── tests/                   # pytest (unit + integration, 392 cases)
+│   ├── tests/                   # pytest (unit + integration, 441 cases)
 │   └── requirements.txt
 ├── frontend/
 │   ├── src/
-│   │   ├── views/               # LibraryView / PlayerView
+│   │   ├── views/               # LibraryView / PlayerView / SettingsView
 │   │   ├── components/          # UI components
 │   │   └── utils/               # stage progress / formatting
-│   └── tests/                   # Vitest
+│   └── tests/                   # Vitest (117 cases)
 ├── data/                        # SQLite + media/ep_* (gitignored)
 ├── docs/                        # transcript-correction guide
 └── start.sh / stop.sh           # one-click start/stop
@@ -315,13 +327,13 @@ podcast-digester/
 ## 🧪 Tests
 
 ```bash
-# Backend (392 cases; markers: unit / integration / api / database / llm)
+# Backend (441 cases; markers: unit / integration / api / database / llm)
 cd backend && source venv/bin/activate && pytest tests
 
 # Unit tests only (fast, no network)
 pytest tests -m unit
 
-# Frontend
+# Frontend (117 cases)
 cd frontend && npm test
 ```
 
@@ -329,7 +341,7 @@ cd frontend && npm test
 
 - **Local-first:** audio and all distilled artifacts stay on your own disk; only LLM calls, platform fetches, and (subtitle-less) speech recognition go over the network.
 - **Cost-bounded:** a per-episode LLM spend above `PODCAST_DIGESTER_MAX_LLM_COST` (default $5) auto-aborts; `app/llm/cost.py` estimates each call's cost by provider / model.
-- **Key safety:** the LLM key is read only from environment variables, and `base_url` passes an SSRF guard that rejects http / private / loopback endpoints.
+- **Key safety:** the LLM key is read from env vars or the settings page and never returned in full (only `****` + last 4); a `base_url` entered on the settings page passes an SSRF guard (rejects http / private / loopback / cloud-metadata), and the SDK disables redirect-following to prevent key leakage.
 
 ## 🛣️ Roadmap
 
@@ -338,6 +350,7 @@ cd frontend && npm test
 - [x] Bilingual subtitles (`text_zh` / `text_en`) with click-to-seek
 - [x] Anti-bot auth (Bilibili cookies, subtitle-less fail-fast)
 - [x] Pluggable multi-provider LLM (DeepSeek / OpenAI / Claude / GLM / Qwen / Doubao / Kimi)
+- [x] Settings page to configure the LLM graphically (domestic/overseas grouping · base_url locking · model auto-fetch · test connection)
 - [ ] More platforms (Twitter/X, TikTok)
 - [ ] Full-text search / cross-episode knowledge graph
 - [ ] Mobile-responsive UI

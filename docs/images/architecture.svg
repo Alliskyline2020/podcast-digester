@@ -67,7 +67,7 @@
   <rect x="310.0" y="178.0" width="160.0" height="96.0" rx="10.0" fill="#f0fdfa" stroke="#5eead4" stroke-width="1.8" filter="url(#shadowSoft)"/>
   <text x="390.0" y="196.0" text-anchor="middle" class="node-type">API</text>
   <text x="390.0" y="232.0" text-anchor="middle" class="node-title">FastAPI</text>
-  <text x="390.0" y="254.0" text-anchor="middle" class="node-sub">:8000 · 节目/字幕/导出</text>
+  <text x="390.0" y="254.0" text-anchor="middle" class="node-sub">:8000 · 节目/字幕/导出/设置</text>
   <rect x="310.0" y="360.0" width="160.0" height="96.0" rx="10.0" fill="#faf5ff" stroke="#c4b5fd" stroke-width="1.8" filter="url(#shadowSoft)"/>
   <text x="390.0" y="378.0" text-anchor="middle" class="node-type">WORKER</text>
   <text x="390.0" y="414.0" text-anchor="middle" class="node-title">Worker</text>
@@ -90,7 +90,7 @@
   <rect x="360.0" y="548.0" width="240.0" height="80.0" rx="10.0" fill="#ffffff" stroke="#d1d5db" stroke-width="1.8" filter="url(#shadowSoft)"/>
   <text x="480.0" y="566.0" text-anchor="middle" class="node-type">蒸馏</text>
   <text x="480.0" y="594.0" text-anchor="middle" class="node-title">可插拔 LLM</text>
-  <text x="480.0" y="616.0" text-anchor="middle" class="node-sub">DeepSeek / OpenAI / Claude / GLM / 通义 …</text>
+  <text x="480.0" y="616.0" text-anchor="middle" class="node-sub">设置页切换 · 国内/国际多厂商</text>
   <rect x="640.0" y="548.0" width="240.0" height="80.0" rx="10.0" fill="#ffffff" stroke="#d1d5db" stroke-width="1.8" filter="url(#shadowSoft)"/>
   <text x="760.0" y="566.0" text-anchor="middle" class="node-type">ASR</text>
   <text x="760.0" y="594.0" text-anchor="middle" class="node-title">Apple AFM 3</text>
