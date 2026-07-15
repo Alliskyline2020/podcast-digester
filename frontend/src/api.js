@@ -349,3 +349,21 @@ export async function testLlmConfig(cfg) {
   if (!res.ok) throw new Error('测试请求失败')
   return await res.json()
 }
+
+/**
+ * 拉取端点可用模型列表(服务端调用,key 不出浏览器)。
+ * @param {Object} cfg - { provider?, provider_type?, api_key?, base_url? }
+ * @returns {Promise<{ok:boolean, models?:string[], detail?:string}>}
+ */
+export async function listLlmModels(cfg) {
+  const res = await fetchWithTimeout(`${API_BASE}/admin/llm-config/models`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(cfg),
+  }, 20000)
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || '拉取模型列表失败')
+  }
+  return await res.json()
+}
