@@ -119,3 +119,24 @@ async def ping_llm(cfg: LLMConfig) -> tuple[bool, str]:
         return True, f"连通（模型 {resp.model}）"
     except Exception as e:
         return False, _humanize_llm_error(e)
+
+
+async def list_models(cfg: LLMConfig) -> tuple[bool, list[str] | str]:
+    """拉取该端点可用模型列表。
+
+    用传入的 cfg(而非 get_config()),这样能拉「未保存的草稿值」。
+    返回 (True, [model_id...]) 或 (False, 中文原因)。绝不抛错。
+    """
+    adapter = _get_adapter(cfg, min(cfg.timeout, 20.0))
+    try:
+        ids = await adapter.list_models()
+    except Exception as e:
+        return False, _humanize_llm_error(e)
+    # 去重保序
+    seen: set[str] = set()
+    dedup: list[str] = []
+    for mid in ids:
+        if mid and mid not in seen:
+            seen.add(mid)
+            dedup.append(mid)
+    return True, dedup

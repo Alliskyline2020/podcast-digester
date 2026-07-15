@@ -57,6 +57,11 @@ class OpenAIAdapter:
             cost_usd=cost(model, usage["prompt_tokens"], usage["completion_tokens"]),
         )
 
+    async def list_models(self) -> list[str]:
+        """返回该端点可用模型 id 列表(OpenAI 兼容 GET /models)。"""
+        page = await self._client.models.list()
+        return [m.id for m in page.data]
+
 
 def _split_system(messages):
     """把 OpenAI 风格 messages 拆成 (system_str, conversation[])。
@@ -132,3 +137,8 @@ class AnthropicAdapter:
             finish_reason=_normalize_stop_reason(resp.stop_reason),
             cost_usd=cost(model, usage["prompt_tokens"], usage["completion_tokens"]),
         )
+
+    async def list_models(self) -> list[str]:
+        """返回该端点可用模型 id 列表(Anthropic GET /v1/models)。"""
+        page = await self._client.models.list()
+        return [m.id for m in page.data]
