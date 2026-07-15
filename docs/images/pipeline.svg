@@ -1,0 +1,115 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 1320" width="960" height="1320">
+  <defs>
+    <marker id="arrowA" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#7c3aed"/>
+    </marker>
+    <marker id="arrowB" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#10b981"/>
+    </marker>
+    <marker id="arrowC" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#2563eb"/>
+    </marker>
+    <marker id="arrowE" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#f97316"/>
+    </marker>
+    <marker id="arrowF" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#7c3aed"/>
+    </marker>
+    <marker id="arrowG" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#ef4444"/>
+    </marker>
+    <marker id="arrowH" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#6b7280"/>
+    </marker>
+    <filter id="shadowSoft" x="-20%" y="-20%" width="140%" height="160%">
+      <feDropShadow dx="0" dy="3" stdDeviation="6" flood-color="#0f172a" flood-opacity="0.12"/>
+    </filter>
+    <filter id="shadowGlass" x="-20%" y="-20%" width="140%" height="160%">
+      <feDropShadow dx="0" dy="10" stdDeviation="16" flood-color="#020617" flood-opacity="0.28"/>
+    </filter>
+    <style>
+    text { font-family: 'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', 'Microsoft JhengHei', 'SimHei', sans-serif; }
+    .title { font-size: 30px; font-weight: 700; fill: #111827; }
+    .subtitle { font-size: 14px; font-weight: 500; fill: #6b7280; }
+    .section { font-size: 13px; font-weight: 700; fill: #2563eb; letter-spacing: 1.4px; }
+    .section-sub { font-size: 12px; font-weight: 500; fill: #94a3b8; }
+    .node-title { font-size: 18px; font-weight: 700; fill: #111827; }
+    .node-sub { font-size: 12px; font-weight: 500; fill: #6b7280; }
+    .node-type { font-size: 12px; font-weight: 700; fill: #9ca3af; letter-spacing: 0.08em; }
+    .arrow-label { font-size: 12px; font-weight: 600; fill: #6b7280; }
+    .legend { font-size: 12px; font-weight: 500; fill: #6b7280; }
+    .footnote { font-size: 12px; font-weight: 500; fill: #94a3b8; }
+    </style>
+  </defs>
+  <rect width="960.0" height="1320.0" fill="#ffffff"/>
+  <text x="480.0" y="56" text-anchor="middle" class="title">Podcast Digester · 处理流程</text>
+  <text x="480.0" y="82" text-anchor="middle" class="subtitle">8 阶段可断点续跑 Pipeline · 每阶段产出 JSON checkpoint + SQLite 状态</text>
+  <path d="M 480.0,180.0 L 480.0,212.0" fill="none" stroke="#7c3aed" stroke-width="2.4" marker-end="url(#arrowA)"/>
+  <path d="M 480.0,276.0 L 480.0,308.0" fill="none" stroke="#7c3aed" stroke-width="2.4" marker-end="url(#arrowA)"/>
+  <path d="M 480.0,396.0 L 480.0,416.4 L 220.0,427.6 L 220.0,448.0" fill="none" stroke="#f97316" stroke-width="2.4" marker-end="url(#arrowE)"/>
+  <path d="M 480.0,396.0 L 480.0,416.4 L 740.0,427.6 L 740.0,448.0" fill="none" stroke="#f97316" stroke-width="2.4" marker-end="url(#arrowE)"/>
+  <path d="M 220.0,512.0 L 349.6,600.0 L 370.0,600.0" fill="none" stroke="#7c3aed" stroke-width="2.4" marker-end="url(#arrowA)"/>
+  <path d="M 740.0,512.0 L 610.4,600.0 L 590.0,600.0" fill="none" stroke="#7c3aed" stroke-width="2.4" marker-end="url(#arrowA)"/>
+  <path d="M 480.0,632.0 L 480.0,664.0" fill="none" stroke="#7c3aed" stroke-width="2.4" marker-end="url(#arrowA)"/>
+  <path d="M 480.0,728.0 L 480.0,760.0" fill="none" stroke="#7c3aed" stroke-width="2.4" marker-end="url(#arrowA)"/>
+  <path d="M 480.0,824.0 L 480.0,856.0" fill="none" stroke="#7c3aed" stroke-width="2.4" marker-end="url(#arrowA)"/>
+  <path d="M 480.0,920.0 L 480.0,952.0" fill="none" stroke="#7c3aed" stroke-width="2.4" marker-end="url(#arrowA)"/>
+  <path d="M 480.0,1016.0 L 480.0,1048.0" fill="none" stroke="#7c3aed" stroke-width="2.4" marker-end="url(#arrowA)"/>
+  <path d="M 480.0,1112.0 L 480.0,1144.0" fill="none" stroke="#7c3aed" stroke-width="2.4" marker-end="url(#arrowA)"/>
+  <rect x="370.0" y="116.0" width="220.0" height="64.0" rx="10.0" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.8" filter="url(#shadowSoft)"/>
+  <text x="480.0" y="134.0" text-anchor="middle" class="node-type">INPUT</text>
+  <text x="480.0" y="154.0" text-anchor="middle" class="node-title">🔗 链接输入</text>
+  <text x="480.0" y="176.0" text-anchor="middle" class="node-sub">YouTube / B站 / 抖音 / 小宇宙 / 本地</text>
+  <rect x="370.0" y="212.0" width="220.0" height="64.0" rx="10.0" fill="#f0fdfa" stroke="#5eead4" stroke-width="1.8" filter="url(#shadowSoft)"/>
+  <text x="480.0" y="230.0" text-anchor="middle" class="node-type">STAGE 1</text>
+  <text x="480.0" y="250.0" text-anchor="middle" class="node-title">download</text>
+  <text x="480.0" y="272.0" text-anchor="middle" class="node-sub">yt-dlp 抓取音频</text>
+  <path d="M 372.0 308.0 L 588.0 308.0 L 610.0 352.0 L 588.0 396.0 L 372.0 396.0 L 350.0 352.0 Z" fill="#fff7ed" stroke="#fb923c" stroke-width="2.0" filter="url(#shadowSoft)"/>
+  <text x="480.0" y="326.0" text-anchor="middle" class="node-type">DECISION</text>
+  <text x="480.0" y="358.0" text-anchor="middle" class="node-title">有平台字幕?</text>
+  <rect x="110.0" y="448.0" width="220.0" height="64.0" rx="10.0" fill="#ffffff" stroke="#d1d5db" stroke-width="1.8" filter="url(#shadowSoft)"/>
+  <text x="220.0" y="466.0" text-anchor="middle" class="node-type">有 CC</text>
+  <text x="220.0" y="486.0" text-anchor="middle" class="node-title">transcribe</text>
+  <text x="220.0" y="508.0" text-anchor="middle" class="node-sub">直接用平台字幕</text>
+  <rect x="630.0" y="448.0" width="220.0" height="64.0" rx="10.0" fill="#ffffff" stroke="#d1d5db" stroke-width="1.8" filter="url(#shadowSoft)"/>
+  <text x="740.0" y="466.0" text-anchor="middle" class="node-type">无 CC</text>
+  <text x="740.0" y="486.0" text-anchor="middle" class="node-title">transcribe</text>
+  <text x="740.0" y="508.0" text-anchor="middle" class="node-sub">Apple AFM 3 语音识别</text>
+  <rect x="370.0" y="568.0" width="220.0" height="64.0" rx="10.0" fill="#faf5ff" stroke="#c4b5fd" stroke-width="1.8" filter="url(#shadowSoft)"/>
+  <text x="480.0" y="586.0" text-anchor="middle" class="node-type">STAGE 3</text>
+  <text x="480.0" y="606.0" text-anchor="middle" class="node-title">polish</text>
+  <text x="480.0" y="628.0" text-anchor="middle" class="node-sub">LLM 标点 / 去口癖 / 修结巴</text>
+  <rect x="370.0" y="664.0" width="220.0" height="64.0" rx="10.0" fill="#f9fafb" stroke="#cbd5e1" stroke-width="1.8" filter="url(#shadowSoft)"/>
+  <text x="480.0" y="682.0" text-anchor="middle" class="node-type">STAGE 4</text>
+  <text x="480.0" y="702.0" text-anchor="middle" class="node-title">translate</text>
+  <text x="480.0" y="724.0" text-anchor="middle" class="node-sub">外文 → 中文（中文源跳过）</text>
+  <rect x="370.0" y="760.0" width="220.0" height="64.0" rx="10.0" fill="#faf5ff" stroke="#c4b5fd" stroke-width="1.8" filter="url(#shadowSoft)"/>
+  <text x="480.0" y="778.0" text-anchor="middle" class="node-type">STAGE 5</text>
+  <text x="480.0" y="798.0" text-anchor="middle" class="node-title">chapterize</text>
+  <text x="480.0" y="820.0" text-anchor="middle" class="node-sub">语义分章</text>
+  <rect x="370.0" y="856.0" width="220.0" height="64.0" rx="10.0" fill="#faf5ff" stroke="#c4b5fd" stroke-width="1.8" filter="url(#shadowSoft)"/>
+  <text x="480.0" y="874.0" text-anchor="middle" class="node-type">STAGE 6</text>
+  <text x="480.0" y="894.0" text-anchor="middle" class="node-title">summarize</text>
+  <text x="480.0" y="916.0" text-anchor="middle" class="node-sub">逐章中文摘要</text>
+  <rect x="370.0" y="952.0" width="220.0" height="64.0" rx="10.0" fill="#faf5ff" stroke="#c4b5fd" stroke-width="1.8" filter="url(#shadowSoft)"/>
+  <text x="480.0" y="970.0" text-anchor="middle" class="node-type">STAGE 7</text>
+  <text x="480.0" y="990.0" text-anchor="middle" class="node-title">highlight</text>
+  <text x="480.0" y="1012.0" text-anchor="middle" class="node-sub">TL;DR + 5 类亮点</text>
+  <rect x="370.0" y="1048.0" width="220.0" height="64.0" rx="10.0" fill="#faf5ff" stroke="#c4b5fd" stroke-width="1.8" filter="url(#shadowSoft)"/>
+  <text x="480.0" y="1066.0" text-anchor="middle" class="node-type">STAGE 8</text>
+  <text x="480.0" y="1086.0" text-anchor="middle" class="node-title">product_insights</text>
+  <text x="480.0" y="1108.0" text-anchor="middle" class="node-sub">产品 / 技术 / 市场洞察</text>
+  <rect x="370.0" y="1144.0" width="220.0" height="64.0" rx="10.0" fill="#dcfce7" stroke="#16a34a" stroke-width="1.8" filter="url(#shadowSoft)"/>
+  <text x="480.0" y="1162.0" text-anchor="middle" class="node-type">DONE</text>
+  <text x="480.0" y="1182.0" text-anchor="middle" class="node-title">✅ ready</text>
+  <text x="480.0" y="1204.0" text-anchor="middle" class="node-sub">可播放 · 可检索</text>
+  <rect x="329.0" y="408.0" width="42" height="20" rx="6" fill="#ffffff" opacity="0.94"/>
+  <text x="350.0" y="422.0" text-anchor="middle" class="arrow-label">有 CC</text>
+  <rect x="589.0" y="408.0" width="42" height="20" rx="6" fill="#ffffff" opacity="0.94"/>
+  <text x="610.0" y="422.0" text-anchor="middle" class="arrow-label">无 CC</text>
+  <line x1="42.0" y1="1242.0" x2="72.0" y2="1242.0" stroke="#7c3aed" stroke-width="2.4" marker-end="url(#arrowA)"/>
+  <text x="82.0" y="1246.0" class="legend">主流程</text>
+  <line x1="42.0" y1="1264.0" x2="72.0" y2="1264.0" stroke="#f97316" stroke-width="2.4" marker-end="url(#arrowE)"/>
+  <text x="82.0" y="1268.0" class="legend">决策分支</text>
+  <text x="42.0" y="1304.0" class="footnote">中文源自动跳过 translate · 已有规范标点的字幕跳过 polish · 每阶段 checkpoint 落盘，崩溃可断点续跑</text>
+</svg>

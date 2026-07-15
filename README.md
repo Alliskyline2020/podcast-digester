@@ -65,21 +65,11 @@
 
 每集内容按下列阶段顺序处理，**可断点续跑**（每阶段产出 JSON checkpoint + SQLite 状态）：
 
-```mermaid
-flowchart LR
-    A[🔗 链接<br/>YouTube/B站/抖音/小宇宙/本地] --> B[⬇️ download<br/>yt-dlp 抓取音频]
-    B --> C{有平台字幕?}
-    C -- 有 CC --> D[📝 transcribe<br/>直接用字幕]
-    C -- 无 CC --> E[🗣️ transcribe<br/>Apple AFM 3 语音识别]
-    D --> F[✨ polish<br/>LLM 标点 / 去口癖 / 修结巴]
-    E --> F
-    F --> G[🌐 translate<br/>外文 → 中文]
-    G --> H[📑 chapterize<br/>语义分章]
-    H --> I[📋 summarize<br/>逐章中文摘要]
-    I --> J[💡 highlight<br/>TL;DR + 5 类亮点]
-    J --> K[🔍 product_insights<br/>产品/技术/市场洞察]
-    K --> L([✅ ready<br/>可播放可检索])
-```
+<div align="center">
+
+![Podcast Digester 处理流程](./docs/images/pipeline.svg)
+
+</div>
 
 中文源会自动跳过 `translate`；已有规范标点的平台字幕会跳过 `polish`，避免无谓的 LLM 开销。
 
@@ -95,34 +85,11 @@ flowchart LR
 
 ## 🏗️ 架构
 
-```mermaid
-flowchart TB
-    subgraph Browser["浏览器"]
-        FE["Vue 3 + Vite 前端<br/>:5173"]
-    end
-    subgraph Backend["本地服务 (launchd 托管)"]
-        API["FastAPI :8000<br/>节目 / 字幕 / 导出 / 管理"]
-        WK["Worker<br/>轮询 + 跑 Pipeline"]
-    end
-    subgraph Data["本地存储"]
-        DB[("SQLite<br/>episode/stage/source")]
-        FS["data/media/ep_*<br/>音频 + 蒸馏产物 JSON"]
-    end
-    subgraph External["外部依赖"]
-        YT["yt-dlp<br/>YouTube/B站/抖音/小宇宙"]
-        LLM["可插拔 LLM<br/>DeepSeek / OpenAI / Claude /<br/>GLM / 通义 / 豆包 / Kimi"]
-        ASR["Apple AFM 3<br/>无字幕时回退"]
-    end
+<div align="center">
 
-    FE -- "/api 代理" --> API
-    API <--> DB
-    API --> WK
-    WK --> YT
-    WK --> LLM
-    WK --> ASR
-    WK --> FS
-    WK --> DB
-```
+![系统架构](./docs/images/architecture.svg)
+
+</div>
 
 **完全本地优先**：媒体文件与所有蒸馏产物存在本机磁盘；只有 LLM 调用、平台抓取、（无字幕时的）语音识别走网络。
 
@@ -190,6 +157,24 @@ LLM_MODEL=your-model
 | **本地文件** | 直接喂已下载的音视频文件 |
 
 鉴权平台的 cookie 解析与下载路径**统一**复用同一套策略（浏览器优先，`cookies.txt` 兜底），下载与标题抓取都走它，不会再出现「下了音频却抓不到标题」的错位。
+
+### 🔑 Cookie 获取（鉴权平台）
+
+clone 项目后，B 站、部分 YouTube（年龄 / 地区限制）等需要登录态。**浏览器优先、`cookies.txt` 兜底**，任选其一：
+
+**方式 A · 浏览器自动读取（推荐，零配置）**
+
+在本机浏览器里**登录过**该平台即可——程序自动读取 Chrome / Edge / Firefox / Safari 的登录态，**无需导出任何文件**。下载前在该浏览器登录一次就行。
+
+**方式 B · `cookies.txt`（兜底，服务器 / 无 GUI 环境）**
+
+1. 浏览器装扩展 **「Get cookies.txt LOCALLY」**（Chrome / Edge 商店可搜到）
+2. 打开目标平台网页并确认已登录 → 扩展里点导出
+3. 把文件放到下面任一位置（程序按此顺序自动探测）：
+   - 项目根目录 `podcast-digester/cookies.txt`（随项目走，推荐）
+   - `~/.config/yt-dlp/cookies.txt`（全局共享）
+
+> 两种方式都不用改代码或环境变量，`app/utils/cookie_helper.py` 自动按「浏览器 → `cookies.txt`」顺序探测。
 
 ## 🚀 快速开始
 

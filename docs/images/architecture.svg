@@ -1,0 +1,123 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 720" width="960" height="720">
+  <defs>
+    <marker id="arrowA" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#7c3aed"/>
+    </marker>
+    <marker id="arrowB" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#10b981"/>
+    </marker>
+    <marker id="arrowC" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#2563eb"/>
+    </marker>
+    <marker id="arrowE" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#f97316"/>
+    </marker>
+    <marker id="arrowF" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#7c3aed"/>
+    </marker>
+    <marker id="arrowG" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#ef4444"/>
+    </marker>
+    <marker id="arrowH" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#6b7280"/>
+    </marker>
+    <filter id="shadowSoft" x="-20%" y="-20%" width="140%" height="160%">
+      <feDropShadow dx="0" dy="3" stdDeviation="6" flood-color="#0f172a" flood-opacity="0.12"/>
+    </filter>
+    <filter id="shadowGlass" x="-20%" y="-20%" width="140%" height="160%">
+      <feDropShadow dx="0" dy="10" stdDeviation="16" flood-color="#020617" flood-opacity="0.28"/>
+    </filter>
+    <style>
+    text { font-family: 'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', 'Microsoft JhengHei', 'SimHei', sans-serif; }
+    .title { font-size: 30px; font-weight: 700; fill: #111827; }
+    .subtitle { font-size: 14px; font-weight: 500; fill: #6b7280; }
+    .section { font-size: 13px; font-weight: 700; fill: #2563eb; letter-spacing: 1.4px; }
+    .section-sub { font-size: 12px; font-weight: 500; fill: #94a3b8; }
+    .node-title { font-size: 18px; font-weight: 700; fill: #111827; }
+    .node-sub { font-size: 12px; font-weight: 500; fill: #6b7280; }
+    .node-type { font-size: 12px; font-weight: 700; fill: #9ca3af; letter-spacing: 0.08em; }
+    .arrow-label { font-size: 12px; font-weight: 600; fill: #6b7280; }
+    .legend { font-size: 12px; font-weight: 500; fill: #6b7280; }
+    .footnote { font-size: 12px; font-weight: 500; fill: #94a3b8; }
+    </style>
+  </defs>
+  <rect width="960.0" height="720.0" fill="#ffffff"/>
+  <text x="480.0" y="56" text-anchor="middle" class="title">Podcast Digester · 系统架构</text>
+  <text x="480.0" y="82" text-anchor="middle" class="subtitle">本地优先 · 媒体与所有蒸馏产物存在本机磁盘</text>
+  <rect x="44.0" y="124.0" width="210.0" height="200.0" rx="16.0" fill="none" stroke="#dbe5f1" stroke-width="1.4" stroke-dasharray="6 5"/>
+  <text x="62.0" y="148.0" class="section">浏览器</text>
+  <rect x="290.0" y="124.0" width="200.0" height="360.0" rx="16.0" fill="none" stroke="#dbe5f1" stroke-width="1.4" stroke-dasharray="6 5"/>
+  <text x="308.0" y="148.0" class="section">本地服务 · LAUNCHD 托管</text>
+  <rect x="540.0" y="124.0" width="376.0" height="210.0" rx="16.0" fill="none" stroke="#dbe5f1" stroke-width="1.4" stroke-dasharray="6 5"/>
+  <text x="558.0" y="148.0" class="section">本地存储</text>
+  <rect x="44.0" y="500.0" width="872.0" height="160.0" rx="16.0" fill="none" stroke="#dbe5f1" stroke-width="1.4" stroke-dasharray="6 5"/>
+  <text x="62.0" y="524.0" class="section">外部依赖 · 仅这几类走网络</text>
+  <path d="M 234.0,226.0 L 310.0,226.0" fill="none" stroke="#7c3aed" stroke-width="2.4" marker-end="url(#arrowA)"/>
+  <path d="M 390.0,274.0 L 390.0,360.0" fill="none" stroke="#7c3aed" stroke-width="2.4" marker-end="url(#arrowA)"/>
+  <path d="M 470.0,226.0 L 490.4,226.0 L 539.6,230.0 L 560.0,230.0" fill="none" stroke="#2563eb" stroke-width="2.4" marker-end="url(#arrowC)"/>
+  <path d="M 470.0,408.0 L 635.0,408.0 L 635.0,290.0" fill="none" stroke="#10b981" stroke-width="2.4" marker-end="url(#arrowB)"/>
+  <path d="M 470.0,408.0 L 815.0,408.0 L 815.0,290.0" fill="none" stroke="#10b981" stroke-width="2.4" marker-end="url(#arrowB)"/>
+  <path d="M 390.0,456.0 L 390.0,476.4 L 200.0,476.4 L 200.0,548.0" fill="none" stroke="#f97316" stroke-width="2.4" marker-end="url(#arrowE)"/>
+  <path d="M 390.0,456.0 L 390.0,476.4 L 480.0,476.4 L 480.0,548.0" fill="none" stroke="#f97316" stroke-width="2.4" marker-end="url(#arrowE)"/>
+  <path d="M 390.0,456.0 L 390.0,476.4 L 760.0,476.4 L 760.0,548.0" fill="none" stroke="#f97316" stroke-width="2.4" marker-end="url(#arrowE)"/>
+  <rect x="64.0" y="178.0" width="170.0" height="96.0" rx="10.0" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.8" filter="url(#shadowSoft)"/>
+  <text x="149.0" y="196.0" text-anchor="middle" class="node-type">BROWSER</text>
+  <text x="149.0" y="232.0" text-anchor="middle" class="node-title">Vue 3 + Vite</text>
+  <text x="149.0" y="254.0" text-anchor="middle" class="node-sub">前端 · :5173</text>
+  <rect x="310.0" y="178.0" width="160.0" height="96.0" rx="10.0" fill="#f0fdfa" stroke="#5eead4" stroke-width="1.8" filter="url(#shadowSoft)"/>
+  <text x="390.0" y="196.0" text-anchor="middle" class="node-type">API</text>
+  <text x="390.0" y="232.0" text-anchor="middle" class="node-title">FastAPI</text>
+  <text x="390.0" y="254.0" text-anchor="middle" class="node-sub">:8000 · 节目/字幕/导出</text>
+  <rect x="310.0" y="360.0" width="160.0" height="96.0" rx="10.0" fill="#faf5ff" stroke="#c4b5fd" stroke-width="1.8" filter="url(#shadowSoft)"/>
+  <text x="390.0" y="378.0" text-anchor="middle" class="node-type">WORKER</text>
+  <text x="390.0" y="414.0" text-anchor="middle" class="node-title">Worker</text>
+  <text x="390.0" y="436.0" text-anchor="middle" class="node-sub">轮询 + 跑 Pipeline</text>
+  <ellipse cx="635.0" cy="185.0" rx="37.5" ry="15.0" fill="#ecfdf5" stroke="#10b981" stroke-width="2.2"/>
+  <rect x="560.0" y="185.0" width="150.0" height="90.0" fill="#ecfdf5" stroke="#10b981" stroke-width="2.2"/>
+  <ellipse cx="635.0" cy="275.0" rx="37.5" ry="15.0" fill="#ecfdf5" stroke="#10b981" stroke-width="2.2"/>
+  <ellipse cx="635.0" cy="215.6" rx="37.5" ry="15.0" fill="none" stroke="#10b981" stroke-opacity="0.45" stroke-width="1.2"/>
+  <ellipse cx="635.0" cy="242.0" rx="37.5" ry="15.0" fill="none" stroke="#10b981" stroke-opacity="0.25" stroke-width="1.2"/>
+  <text x="635.0" y="224.0" text-anchor="middle" class="node-title">SQLite</text>
+  <text x="635.0" y="248.0" text-anchor="middle" class="node-sub">episode / stage / source</text>
+  <rect x="732.0" y="170.0" width="166.0" height="120.0" rx="10.0" fill="#fff7ed" stroke="#fb923c" stroke-width="1.8" filter="url(#shadowSoft)"/>
+  <text x="815.0" y="188.0" text-anchor="middle" class="node-type">FS</text>
+  <text x="815.0" y="236.0" text-anchor="middle" class="node-title">本地文件</text>
+  <text x="815.0" y="258.0" text-anchor="middle" class="node-sub">data/media/ep_* · JSON 产物</text>
+  <rect x="80.0" y="548.0" width="240.0" height="80.0" rx="10.0" fill="#ffffff" stroke="#d1d5db" stroke-width="1.8" filter="url(#shadowSoft)"/>
+  <text x="200.0" y="566.0" text-anchor="middle" class="node-type">抓取</text>
+  <text x="200.0" y="594.0" text-anchor="middle" class="node-title">yt-dlp</text>
+  <text x="200.0" y="616.0" text-anchor="middle" class="node-sub">YouTube / B站 / 抖音 / 小宇宙</text>
+  <rect x="360.0" y="548.0" width="240.0" height="80.0" rx="10.0" fill="#ffffff" stroke="#d1d5db" stroke-width="1.8" filter="url(#shadowSoft)"/>
+  <text x="480.0" y="566.0" text-anchor="middle" class="node-type">蒸馏</text>
+  <text x="480.0" y="594.0" text-anchor="middle" class="node-title">可插拔 LLM</text>
+  <text x="480.0" y="616.0" text-anchor="middle" class="node-sub">DeepSeek / OpenAI / Claude / GLM / 通义 …</text>
+  <rect x="640.0" y="548.0" width="240.0" height="80.0" rx="10.0" fill="#ffffff" stroke="#d1d5db" stroke-width="1.8" filter="url(#shadowSoft)"/>
+  <text x="760.0" y="566.0" text-anchor="middle" class="node-type">ASR</text>
+  <text x="760.0" y="594.0" text-anchor="middle" class="node-title">Apple AFM 3</text>
+  <text x="760.0" y="616.0" text-anchor="middle" class="node-sub">无字幕时语音识别</text>
+  <rect x="240.5" y="196.0" width="63" height="20" rx="6" fill="#ffffff" opacity="0.94"/>
+  <text x="272.0" y="210.0" text-anchor="middle" class="arrow-label">/api 代理</text>
+  <rect x="351.0" y="303.0" width="42" height="20" rx="6" fill="#ffffff" opacity="0.94"/>
+  <text x="372.0" y="317.0" text-anchor="middle" class="arrow-label">派发任务</text>
+  <rect x="497.0" y="198.0" width="36" height="20" rx="6" fill="#ffffff" opacity="0.94"/>
+  <text x="515.0" y="212.0" text-anchor="middle" class="arrow-label">查询</text>
+  <rect x="534.5" y="378.0" width="36" height="20" rx="6" fill="#ffffff" opacity="0.94"/>
+  <text x="552.5" y="392.0" text-anchor="middle" class="arrow-label">写状态</text>
+  <rect x="624.5" y="378.0" width="36" height="20" rx="6" fill="#ffffff" opacity="0.94"/>
+  <text x="642.5" y="392.0" text-anchor="middle" class="arrow-label">写产物</text>
+  <rect x="274.0" y="462.4" width="42" height="20" rx="6" fill="#ffffff" opacity="0.94"/>
+  <text x="295.0" y="476.4" text-anchor="middle" class="arrow-label">抓取音频</text>
+  <rect x="414.0" y="462.4" width="42" height="20" rx="6" fill="#ffffff" opacity="0.94"/>
+  <text x="435.0" y="476.4" text-anchor="middle" class="arrow-label">蒸馏调用</text>
+  <rect x="550.5" y="446.4" width="49" height="20" rx="6" fill="#ffffff" opacity="0.94"/>
+  <text x="575.0" y="460.4" text-anchor="middle" class="arrow-label">无字幕回退</text>
+  <line x1="42.0" y1="598.0" x2="72.0" y2="598.0" stroke="#7c3aed" stroke-width="2.4" marker-end="url(#arrowA)"/>
+  <text x="82.0" y="602.0" class="legend">主流程 / 派发</text>
+  <line x1="42.0" y1="620.0" x2="72.0" y2="620.0" stroke="#2563eb" stroke-width="2.4" marker-end="url(#arrowC)"/>
+  <text x="82.0" y="624.0" class="legend">读 SQLite</text>
+  <line x1="42.0" y1="642.0" x2="72.0" y2="642.0" stroke="#10b981" stroke-width="2.4" marker-end="url(#arrowB)"/>
+  <text x="82.0" y="646.0" class="legend">写存储</text>
+  <line x1="42.0" y1="664.0" x2="72.0" y2="664.0" stroke="#f97316" stroke-width="2.4" marker-end="url(#arrowE)"/>
+  <text x="82.0" y="668.0" class="legend">外部网络调用</text>
+  <text x="42.0" y="704.0" class="footnote">完全本地优先 · 仅 LLM 调用 / 平台抓取 / (无字幕时)语音识别走网络</text>
+</svg>

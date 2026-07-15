@@ -65,21 +65,11 @@ When you face a 2-hour podcast, the real cost isn't *understanding* it — it's 
 
 Each episode flows through these stages in order, with **resumable checkpoints** (per-stage JSON + SQLite state):
 
-```mermaid
-flowchart LR
-    A[🔗 Link<br/>YouTube/Bilibili/Douyin/Xiaoyuzhou/Local] --> B[⬇️ download<br/>yt-dlp fetches audio]
-    B --> C{Platform subtitles?}
-    C -- has CC --> D[📝 transcribe<br/>use subtitles directly]
-    C -- no CC --> E[🗣️ transcribe<br/>Apple AFM 3 ASR]
-    D --> F[✨ polish<br/>LLM punctuation / filler removal / stutter fix]
-    E --> F
-    F --> G[🌐 translate<br/>foreign → Chinese]
-    G --> H[📑 chapterize<br/>semantic segmentation]
-    H --> I[📋 summarize<br/>per-chapter summary]
-    I --> J[💡 highlight<br/>TL;DR + 5 highlight kinds]
-    J --> K[🔍 product_insights<br/>product/tech/market]
-    K --> L([✅ ready<br/>playable & searchable])
-```
+<div align="center">
+
+![Podcast Digester pipeline](./docs/images/pipeline.svg)
+
+</div>
 
 Chinese sources auto-skip `translate`; platform subtitles that already have proper punctuation auto-skip `polish` — avoiding needless LLM cost.
 
@@ -95,34 +85,11 @@ Chinese sources auto-skip `translate`; platform subtitles that already have prop
 
 ## 🏗️ Architecture
 
-```mermaid
-flowchart TB
-    subgraph Browser["Browser"]
-        FE["Vue 3 + Vite frontend<br/>:5173"]
-    end
-    subgraph Backend["Local services (launchd-managed)"]
-        API["FastAPI :8000<br/>episodes / subtitles / export / admin"]
-        WK["Worker<br/>polls + runs the pipeline"]
-    end
-    subgraph Data["Local storage"]
-        DB[("SQLite<br/>episode/stage/source")]
-        FS["data/media/ep_*<br/>audio + distilled JSON"]
-    end
-    subgraph External["External dependencies"]
-        YT["yt-dlp<br/>YouTube/Bilibili/Douyin/Xiaoyuzhou"]
-        LLM["Pluggable LLM<br/>DeepSeek / OpenAI / Claude /<br/>GLM / Qwen / Doubao / Kimi"]
-        ASR["Apple AFM 3<br/>fallback when no subtitles"]
-    end
+<div align="center">
 
-    FE -- "/api proxy" --> API
-    API <--> DB
-    API --> WK
-    WK --> YT
-    WK --> LLM
-    WK --> ASR
-    WK --> FS
-    WK --> DB
-```
+![System architecture](./docs/images/architecture.svg)
+
+</div>
 
 **Fully local-first:** media files and all distilled artifacts live on your own disk; only LLM calls, platform fetches, and (subtitle-less) speech recognition go over the network.
 
@@ -190,6 +157,24 @@ LLM_MODEL=your-model
 | **Local files** | Feed in an already-downloaded audio/video file |
 
 Cookie parsing for auth-required platforms is **unified** across the download and title-fetch paths (browser first, `cookies.txt` fallback) — no more "downloaded audio but couldn't fetch the title" mismatches.
+
+### 🔑 Getting cookies (for auth-required platforms)
+
+After cloning, platforms like Bilibili — or parts of YouTube (age / region locks) — need a login session. **Browser first, `cookies.txt` fallback** — pick either:
+
+**Option A · Auto-read from browser (recommended, zero config)**
+
+Just **log in** to the platform once in a local browser — the app auto-reads the login session from Chrome / Edge / Firefox / Safari. **No file to export.** Log in once in that browser before downloading.
+
+**Option B · `cookies.txt` (fallback, for servers / headless machines)**
+
+1. Install the browser extension **"Get cookies.txt LOCALLY"** (search the Chrome / Edge store)
+2. Open the target platform page and confirm you're logged in → export from the extension
+3. Drop the file at one of these (auto-detected in this order):
+   - project root `podcast-digester/cookies.txt` (travels with the project, recommended)
+   - `~/.config/yt-dlp/cookies.txt` (shared globally)
+
+> Neither option needs code changes or env vars — `app/utils/cookie_helper.py` probes "browser → `cookies.txt`" automatically.
 
 ## 🚀 Quick Start
 
