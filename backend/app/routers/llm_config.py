@@ -9,9 +9,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from ..deps import verify_admin
-from ..llm.client import ping_llm
+from ..llm.client import ping_llm, list_models
 from ..llm.config import (
     PROVIDERS, _resolve_config, _assert_public_https_base_url, infer_provider_type,
+    provider_base_urls,
 )
 from ..llm.runtime_config import read_runtime_override, write_runtime_override
 
@@ -43,6 +44,8 @@ def _public_providers() -> dict:
             "title": p["title"],
             "provider_type": p["provider_type"],
             "default_base_url": p["default_base_url"],
+            "base_urls": provider_base_urls(name),
+            "base_url_editable": not provider_base_urls(name),
             "default_model": p["default_model"],
         }
         for name, p in PROVIDERS.items()
@@ -134,3 +137,39 @@ async def test_llm_config(req: LLMConfigUpdate) -> dict:
     )
     ok, detail = await ping_llm(cfg)
     return {"ok": ok, "detail": detail}
+
+
+@router.post("/api/admin/llm-config/models")
+async def list_llm_models(req: LLMConfigUpdate) -> dict:
+    """据草稿值(provider/key/base_url)拉取该端点可用模型列表。不落库、不打日志 key。"""
+    from ..llm.config import LLMConfig
+
+    base = _resolve_config(require_key=False)
+    provider = req.provider or base.provider
+    provider_type = req.provider_type or infer_provider_type(provider)
+
+    if req.provider_type and req.provider_type not in (
+        "openai_compatible", "anthropic_compatible"
+    ):
+        return {"ok": False, "detail": "provider_type 非法"}
+
+    api_key = req.api_key or base.api_key
+    base_url = req.base_url if req.base_url is not None else base.base_url
+
+    if not api_key:
+        return {"ok": False, "detail": "未填写 API Key"}
+    if base_url:
+        try:
+            _assert_public_https_base_url(base_url)
+        except ValueError as e:
+            return {"ok": False, "detail": str(e)}
+
+    cfg = LLMConfig(
+        provider=provider, provider_type=provider_type, api_key=api_key,
+        base_url=base_url, model=req.model or base.model,
+        temperature=base.temperature, max_tokens=base.max_tokens, timeout=base.timeout,
+    )
+    ok, val = await list_models(cfg)
+    if ok:
+        return {"ok": True, "models": val}
+    return {"ok": False, "detail": val}
