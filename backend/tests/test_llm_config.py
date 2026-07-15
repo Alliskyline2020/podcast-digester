@@ -2,7 +2,7 @@
 import pytest
 
 from app.llm.config import (
-    PROVIDERS, get_config, infer_provider_type, LLMConfig, _resolve_config,
+    PROVIDERS, get_config, infer_provider_type, LLMConfig, _resolve_config, provider_base_urls,
 )
 
 
@@ -134,3 +134,36 @@ def test_resolve_config_no_require_key_does_not_raise(clean_llm_env):
     # 无 key 也不抛，供 GET 端点加载页面用
     cfg = _resolve_config(require_key=False)
     assert cfg.api_key == ""
+
+
+# ==================== base_urls 锁定列表测试 ====================
+
+def test_providers_have_base_urls_list():
+    for name, p in PROVIDERS.items():
+        assert "base_urls" in p, f"{name} 缺 base_urls"
+        assert isinstance(p["base_urls"], list)
+
+
+def test_default_base_url_is_first_in_base_urls():
+    for name, p in PROVIDERS.items():
+        if p["base_urls"]:
+            assert p["default_base_url"] == p["base_urls"][0], name
+
+
+def test_glm_has_coding_endpoint():
+    assert "https://open.bigmodel.cn/api/coding/paas/v4" in PROVIDERS["glm"]["base_urls"]
+
+
+def test_moonshot_has_global_endpoint():
+    assert "https://api.moonshot.ai/v1" in PROVIDERS["moonshot"]["base_urls"]
+
+
+def test_compatible_providers_have_empty_base_urls():
+    assert PROVIDERS["openai-compatible"]["base_urls"] == []
+    assert PROVIDERS["anthropic-compatible"]["base_urls"] == []
+
+
+def test_provider_base_urls_helper():
+    assert provider_base_urls("glm") == PROVIDERS["glm"]["base_urls"]
+    assert provider_base_urls("openai-compatible") == []
+    assert provider_base_urls("totally-unknown") == []

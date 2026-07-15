@@ -17,7 +17,7 @@ logger = __import__("logging").getLogger(__name__)
 
 
 # ==================== PROVIDERS 预设表 ====================
-# 每个条目：title(展示名) / provider_type(协议) / default_base_url / default_model
+# 每个条目：title(展示名) / provider_type(协议) / default_base_url / base_urls / default_model
 # base_url 留空 = 用 SDK 自带默认（OpenAI / Anthropic 官方端点）。
 # URL 与模型名以厂商官方文档为准（impl 时已核对）。
 PROVIDERS: dict[str, dict] = {
@@ -25,56 +25,71 @@ PROVIDERS: dict[str, dict] = {
         "title": "DeepSeek",
         "provider_type": "openai_compatible",
         "default_base_url": "https://api.deepseek.com",
+        "base_urls": ["https://api.deepseek.com"],
         "default_model": "deepseek-chat",
     },
     "openai": {
         "title": "OpenAI",
         "provider_type": "openai_compatible",
-        "default_base_url": "",  # SDK 默认 https://api.openai.com/v1
+        "default_base_url": "https://api.openai.com/v1",
+        "base_urls": ["https://api.openai.com/v1"],
         "default_model": "gpt-4o-mini",
     },
     "anthropic": {
         "title": "Anthropic (Claude)",
         "provider_type": "anthropic_compatible",
-        "default_base_url": "",  # SDK 默认 https://api.anthropic.com
+        "default_base_url": "https://api.anthropic.com",
+        "base_urls": ["https://api.anthropic.com"],
         "default_model": "claude-3-5-sonnet-latest",
     },
     "glm": {
         "title": "智谱 GLM",
         "provider_type": "openai_compatible",
         "default_base_url": "https://open.bigmodel.cn/api/paas/v4",
+        "base_urls": [
+            "https://open.bigmodel.cn/api/paas/v4",          # 标准
+            "https://open.bigmodel.cn/api/coding/paas/v4",   # 编码套件(Coding)
+        ],
         "default_model": "glm-4-flash",
     },
     "qwen": {
         "title": "通义千问",
         "provider_type": "openai_compatible",
         "default_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "base_urls": ["https://dashscope.aliyuncs.com/compatible-mode/v1"],
         "default_model": "qwen-plus",
     },
     "doubao": {
         "title": "字节豆包",
         "provider_type": "openai_compatible",
         "default_base_url": "https://ark.cn-beijing.volces.com/api/v3",
-        # 豆包模型 id 实为 endpoint id，需用户在火山控制台创建后填入 LLM_MODEL
+        "base_urls": ["https://ark.cn-beijing.volces.com/api/v3"],
+        # 豆包模型 id 实为 endpoint id，需用户在火山控制台创建后填入（模型下拉会拉不到，走手动输入）
         "default_model": "",
     },
     "moonshot": {
         "title": "月之暗面 Kimi",
         "provider_type": "openai_compatible",
         "default_base_url": "https://api.moonshot.cn/v1",
+        "base_urls": [
+            "https://api.moonshot.cn/v1",   # 国内
+            "https://api.moonshot.ai/v1",   # 海外
+        ],
         "default_model": "moonshot-v1-8k",
     },
-    # 通用兜底：用户自填 base_url / model
+    # 通用兜底：用户自填 base_url / model（无锁定列表 → 前端自由输入）
     "openai-compatible": {
-        "title": "OpenAI 兼容（自定义端点）",
+        "title": "OpenAI 兼容(自定义端点)",
         "provider_type": "openai_compatible",
         "default_base_url": "",
+        "base_urls": [],
         "default_model": "",
     },
     "anthropic-compatible": {
-        "title": "Anthropic 兼容（自定义端点）",
+        "title": "Anthropic 兼容(自定义端点)",
         "provider_type": "anthropic_compatible",
         "default_base_url": "",
+        "base_urls": [],
         "default_model": "",
     },
 }
@@ -98,6 +113,12 @@ def infer_provider_type(provider: str) -> str:
     if entry is None:
         return "openai_compatible"
     return entry["provider_type"]
+
+
+def provider_base_urls(provider: str) -> list[str]:
+    """该 provider 的固定 base_url 下拉列表。空列表 = 用户可自由输入。"""
+    entry = PROVIDERS.get(provider, {})
+    return list(entry.get("base_urls", []))
 
 
 # ==================== SSRF 守卫 ====================
