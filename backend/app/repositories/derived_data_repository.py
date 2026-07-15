@@ -9,7 +9,7 @@ import json
 from typing import Dict, Any, Optional
 from datetime import datetime
 
-from app.config import DB_PATH
+from app.database import _connect
 
 
 class DerivedDataRepository:
@@ -18,7 +18,7 @@ class DerivedDataRepository:
     @staticmethod
     async def get(episode_id: str, table_name: str) -> Optional[Dict[str, Any]]:
         """获取派生数据"""
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with _connect() as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
                 f"SELECT * FROM {table_name} WHERE episode_id = ?",
@@ -53,7 +53,7 @@ class DerivedDataRepository:
     @staticmethod
     async def set(episode_id: str, table_name: str, data: Dict[str, Any], json_field_name: str) -> bool:
         """保存派生数据"""
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with _connect() as db:
             json_value = json.dumps(data, ensure_ascii=False)
             now = datetime.now().isoformat()
 
@@ -73,7 +73,7 @@ class DerivedDataRepository:
     @staticmethod
     async def delete(episode_id: str, table_name: str) -> bool:
         """删除派生数据"""
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with _connect() as db:
             await db.execute(
                 f"DELETE FROM {table_name} WHERE episode_id = ?",
                 (episode_id,)

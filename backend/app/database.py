@@ -22,6 +22,51 @@ from .config import DB_PATH
 logger = logging.getLogger(__name__)
 
 
+# ==================== 连接工厂（统一 PRAGMA） ====================
+
+# 保留原始 connect 引用，供 _connect() 内部使用；这样下面对
+# `_connect()` 的批量替换不会误伤工厂自身。
+_AIOSQLITE_CONNECT = aiosqlite.connect
+
+# 写者撞锁时的最长排队时间（毫秒）。SQLite 默认 5s，并发写一撞就抛
+# 'database is locked' → 整集 rollback（所有 LLM 工作白费）。30s 足以让
+# 并发写者排队而非立即失败；配合 WAL 模式几乎不会再发生。
+_BUSY_TIMEOUT_MS = 30000
+
+
+class _PragmaAiosqliteConn:
+    """aiosqlite 连接的薄包装：进入 async-with 时先套上 busy_timeout PRAGMA，
+    再把原生连接交给业务代码。drop-in 替换 `_connect()`。
+
+    journal_mode=WAL 是数据库文件级属性（持久），由 init_db 一次性切换，
+    这里不在每个连接上重设（重复设 WAL 反而会抢一次写锁）。
+    """
+
+    __slots__ = ("_conn",)
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    async def __aenter__(self):
+        db = await self._conn.__aenter__()
+        await db.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
+        return db
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return await self._conn.__aexit__(exc_type, exc, tb)
+
+
+def _connect():
+    """统一的异步连接工厂：自动套上 busy_timeout。
+
+    用法与 `_connect()` 完全一致：
+
+        async with _connect() as db:
+            await db.execute(...)
+    """
+    return _PragmaAiosqliteConn(_AIOSQLITE_CONNECT(DB_PATH))
+
+
 # ==================== 事务管理 ====================
 
 def transactional(func: Callable) -> Callable:
@@ -38,7 +83,7 @@ def transactional(func: Callable) -> Callable:
     """
     @wraps(func)
     async def wrapper(*args, **kwargs):
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with _connect() as db:
             try:
                 # 开始事务
                 await db.execute("BEGIN")
@@ -59,7 +104,7 @@ def transactional(func: Callable) -> Callable:
 
 async def init_db():
     """初始化数据库表"""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         await db.executescript("""
         -- 节目表
         CREATE TABLE IF NOT EXISTS episode (
@@ -146,6 +191,11 @@ async def init_db():
 
         await db.commit()
 
+        # 切到 WAL 模式（持久、文件级）：读者不再阻塞写者，写者持锁窗口大幅
+        # 缩短，从根上缓解 'database is locked'。只需切一次，后续连接自动 WAL。
+        await db.execute("PRAGMA journal_mode=WAL")
+        await db.commit()
+
 
 async def get_db() -> aiosqlite.Connection:
     """获取数据库连接（依赖注入用）
@@ -157,7 +207,7 @@ async def get_db() -> aiosqlite.Connection:
         async with get_db() as db:
             await db.execute(...)
     """
-    return aiosqlite.connect(DB_PATH)
+    return _connect()
 
 
 # ==================== 数据访问层 ====================
@@ -175,7 +225,7 @@ class EpisodeRepository:
     async def create(episode: dict) -> None:
         """创建节目记录（带错误处理）"""
         try:
-            async with aiosqlite.connect(DB_PATH) as db:
+            async with _connect() as db:
                 await db.execute("""
                     INSERT INTO episode (
                         id, title, status, language, media_path, is_fixture, error_msg,
@@ -202,7 +252,7 @@ class EpisodeRepository:
     async def get_by_id(episode_id: str) -> Optional[dict]:
         """获取节目记录（带错误处理）"""
         try:
-            async with aiosqlite.connect(DB_PATH) as db:
+            async with _connect() as db:
                 db.row_factory = aiosqlite.Row
                 async with db.execute(
                     "SELECT * FROM episode WHERE id = ?", (episode_id,)
@@ -225,7 +275,7 @@ class EpisodeRepository:
 
     @staticmethod
     async def list_all() -> List[dict]:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with _connect() as db:
             db.row_factory = aiosqlite.Row
             async with db.execute("""
                 SELECT * FROM episode
@@ -264,7 +314,7 @@ class EpisodeRepository:
             return []
 
         placeholders = ",".join("?" * len(validated))
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with _connect() as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(f"""
                 SELECT * FROM episode
@@ -283,7 +333,7 @@ class EpisodeRepository:
 
     @staticmethod
     async def update_status(episode_id: str, status: str, error_msg: Optional[str] = None) -> None:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with _connect() as db:
             now = datetime.now().isoformat()
             if error_msg:
                 await db.execute("""
@@ -338,7 +388,7 @@ class EpisodeRepository:
 
         set_clause = ", ".join(f"{k} = ?" for k in fields.keys())
         try:
-            async with aiosqlite.connect(DB_PATH) as db:
+            async with _connect() as db:
                 cursor = await db.execute(
                     f"UPDATE episode SET {set_clause} WHERE id = ?",
                     values + [episode_id]
@@ -381,7 +431,7 @@ class EpisodeRepository:
         # 序列化为JSON
         transcript_json = json.dumps(transcript.model_dump(), ensure_ascii=False)
 
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with _connect() as db:
             cursor = await db.execute(
                 "UPDATE episode SET transcript = ?, updated_at = ? WHERE id = ?",
                 (transcript_json, datetime.now().isoformat(), episode_id)
@@ -413,7 +463,7 @@ class EpisodeRepository:
 
     @staticmethod
     async def delete(episode_id: str) -> bool:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with _connect() as db:
             cursor = await db.execute(
                 "DELETE FROM episode WHERE id = ?", (episode_id,)
             )
@@ -422,7 +472,7 @@ class EpisodeRepository:
 
     @staticmethod
     async def update_last_activity(episode_id: str) -> None:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with _connect() as db:
             await db.execute("""
                 UPDATE episode SET last_activity_ts = ? WHERE id = ?
             """, (datetime.now().isoformat(), episode_id))
@@ -439,7 +489,7 @@ class IngestJobRepository:
         Returns:
             True 表示新建成功；False 表示该 episode 已有任务记录（未覆盖既有进度）。
         """
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with _connect() as db:
             now = datetime.now().isoformat()
             cursor = await db.execute("""
                 INSERT INTO ingest_job (episode_id, current_stage, stages_json, created_at, updated_at)
@@ -451,7 +501,7 @@ class IngestJobRepository:
 
     @staticmethod
     async def get_by_id(episode_id: str) -> Optional[dict]:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with _connect() as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
                 "SELECT * FROM ingest_job WHERE episode_id = ?", (episode_id,)
@@ -465,7 +515,7 @@ class IngestJobRepository:
 
     @staticmethod
     async def update_stages(episode_id: str, stages: list, current_stage: str) -> None:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with _connect() as db:
             await db.execute("""
                 UPDATE ingest_job SET stages_json = ?, current_stage = ?, updated_at = ?
                 WHERE episode_id = ?
@@ -478,7 +528,7 @@ class CostLogRepository:
 
     @staticmethod
     async def log(cost_data: dict) -> None:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with _connect() as db:
             await db.execute("""
                 INSERT INTO cost_log (
                     ts, task, model, prompt_tokens, completion_tokens, total_tokens,
@@ -501,7 +551,7 @@ class CostLogRepository:
 
     @staticmethod
     async def get_total_cost(episode_id: Optional[str] = None) -> float:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with _connect() as db:
             if episode_id:
                 async with db.execute(
                     "SELECT SUM(cost_usd) FROM cost_log WHERE episode_id = ?",
@@ -521,7 +571,7 @@ class UsageLogRepository:
     @staticmethod
     async def log(log_data: dict) -> None:
         """记录日志"""
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with _connect() as db:
             await db.execute("""
                 INSERT INTO usage_log (ts, event_type, episode_id, payload_json)
                 VALUES (?, ?, ?, ?)
@@ -536,7 +586,7 @@ class UsageLogRepository:
     @staticmethod
     async def get_by_episode(episode_id: str, limit: int = 10) -> list[dict]:
         """获取某个 episode 的日志记录"""
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with _connect() as db:
             db.row_factory = aiosqlite.Row
             async with db.execute("""
                 SELECT * FROM usage_log
@@ -554,7 +604,7 @@ class ViewStateRepository:
     @staticmethod
     async def get(episode_id: str) -> Optional[dict]:
         """获取 episode 的视图状态"""
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with _connect() as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
                 "SELECT * FROM episode_view_state WHERE episode_id = ?",
@@ -582,7 +632,7 @@ class ViewStateRepository:
             # 更新现有记录
             set_clauses = ", ".join(f"{k} = ?" for k in fields.keys())
             values = list(fields.values()) + [datetime.now().isoformat()]
-            async with aiosqlite.connect(DB_PATH) as db:
+            async with _connect() as db:
                 await db.execute(
                     f"UPDATE episode_view_state SET {set_clauses}, updated_at = ? WHERE episode_id = ?",
                     (*values, episode_id)
@@ -590,7 +640,7 @@ class ViewStateRepository:
                 await db.commit()
         else:
             # 创建新记录
-            async with aiosqlite.connect(DB_PATH) as db:
+            async with _connect() as db:
                 await db.execute("""
                     INSERT INTO episode_view_state (episode_id, highlight_collapsed, last_played_position_ms, updated_at)
                     VALUES (?, ?, ?, ?)
@@ -604,7 +654,7 @@ class SourceRepository:
     @staticmethod
     async def create(episode_id: str, source_type: str, raw_input: str, resolved_url: str = None, requires_auth: bool = False) -> None:
         """创建源记录"""
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with _connect() as db:
             await db.execute("""
                 INSERT INTO source (episode_id, source_type, raw_input, resolved_url, requires_auth, created_at)
                 VALUES (?, ?, ?, ?, ?, ?)
@@ -614,7 +664,7 @@ class SourceRepository:
     @staticmethod
     async def get_by_episode(episode_id: str) -> Optional[dict]:
         """获取 episode 的源记录"""
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with _connect() as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
                 "SELECT * FROM source WHERE episode_id = ?",
@@ -629,7 +679,7 @@ class SourceRepository:
 def _sync_connect():
     """获取同步数据库连接"""
     import aiosqlite
-    return aiosqlite.connect(DB_PATH)
+    return _connect()
 
 
 def _sync_db():
@@ -645,6 +695,9 @@ def _sync_db():
     import sqlite3
     db = sqlite3.connect(DB_PATH, timeout=30.0)
     db.execute("PRAGMA busy_timeout=30000")
+    # WAL 是文件级持久属性；这里幂等重设，保证即便 init_db 还没跑、sync
+    # 连接也能用上 WAL 的并发模型。
+    db.execute("PRAGMA journal_mode=WAL")
     return db
 
 

@@ -204,3 +204,36 @@ class TestSyncDbBusyTimeout:
         with _sync_db() as db:
             row = db.execute("SELECT status FROM episode WHERE id='ep1'").fetchone()
         assert row[0] == "ready"
+
+
+@pytest.mark.unit
+@pytest.mark.database
+class TestAsyncConnectionPragmas:
+    """异步连接必须套 busy_timeout、且 init_db 切 WAL —— 否则 pipeline 收尾
+    的并发 async 写（product_insights 等）与 ASR/LLM 写冲突必 'database is
+    locked'（ep_1784027010762 六件产物齐全却被 rollback 的根因）。
+
+    WAL 是文件级持久属性（init_db 一次性切换）；busy_timeout 是每连接属性，
+    由 _connect() 统一注入。复现写锁竞争本身是 flaky 的，这里用确定的 PRAGMA
+    断言锁住契约。"""
+
+    async def test_connect_applies_busy_timeout(self, tmp_path, monkeypatch):
+        """_connect() 进 async-with 后必须带 busy_timeout=30000。"""
+        import app.database
+        from app.database import _connect
+
+        monkeypatch.setattr(app.database, "DB_PATH", tmp_path / "t.db")
+        async with _connect() as db:
+            bt = (await (await db.execute("PRAGMA busy_timeout")).fetchone())[0]
+        assert bt == 30000
+
+    async def test_init_db_sets_wal_mode(self, tmp_path, monkeypatch):
+        """init_db 必须把新库切到 WAL（持久、文件级）。"""
+        import app.database
+        from app.database import init_db, _connect
+
+        monkeypatch.setattr(app.database, "DB_PATH", tmp_path / "t.db")
+        await init_db()
+        async with _connect() as db:
+            jm = (await (await db.execute("PRAGMA journal_mode")).fetchone())[0]
+        assert jm == "wal"
