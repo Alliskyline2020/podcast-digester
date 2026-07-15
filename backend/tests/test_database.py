@@ -168,6 +168,20 @@ class TestIngestJobRepository:
         assert len(job["stages"]) > 0
 
 
+@pytest.mark.database
+async def test_init_db_creates_app_setting_table(temp_db):
+    """init_db 必须建出 app_setting 表（运行时配置覆写用）。"""
+    import aiosqlite
+    from app import database as _db
+    async with aiosqlite.connect(str(_db.DB_PATH)) as db:
+        cur = await db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='app_setting'"
+        )
+        row = await cur.fetchone()
+    assert row is not None
+    assert row[0] == "app_setting"
+
+
 @pytest.mark.unit
 class TestSyncDbBusyTimeout:
     """同步连接必须设 busy_timeout —— 否则 async pipeline 收尾时

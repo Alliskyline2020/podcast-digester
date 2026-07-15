@@ -136,6 +136,13 @@ async def init_db():
             FOREIGN KEY (episode_id) REFERENCES episode(id) ON DELETE CASCADE
         );
 
+        -- 运行时配置覆写（前端「LLM 设置页」写入；get_config() 读取）
+        CREATE TABLE IF NOT EXISTS app_setting (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
         -- 索引
         CREATE INDEX IF NOT EXISTS idx_episode_status ON episode(status);
         CREATE INDEX IF NOT EXISTS idx_episode_last_activity ON episode(last_activity_ts DESC);
