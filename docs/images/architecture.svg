@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 720" width="960" height="720">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 880" width="960" height="880">
   <defs>
     <marker id="arrowA" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
       <polygon points="0 0, 10 3.5, 0 7" fill="#7c3aed"/>
@@ -41,7 +41,7 @@
     .footnote { font-size: 12px; font-weight: 500; fill: #94a3b8; }
     </style>
   </defs>
-  <rect width="960.0" height="720.0" fill="#ffffff"/>
+  <rect width="960.0" height="880.0" fill="#ffffff"/>
   <text x="480.0" y="56" text-anchor="middle" class="title">Podcast Digester · 系统架构</text>
   <text x="480.0" y="82" text-anchor="middle" class="subtitle">本地优先 · 媒体与所有蒸馏产物存在本机磁盘</text>
   <rect x="44.0" y="124.0" width="210.0" height="200.0" rx="16.0" fill="none" stroke="#dbe5f1" stroke-width="1.4" stroke-dasharray="6 5"/>
@@ -111,13 +111,13 @@
   <text x="435.0" y="476.4" text-anchor="middle" class="arrow-label">蒸馏调用</text>
   <rect x="550.5" y="446.4" width="49" height="20" rx="6" fill="#ffffff" opacity="0.94"/>
   <text x="575.0" y="460.4" text-anchor="middle" class="arrow-label">无字幕回退</text>
-  <line x1="42.0" y1="598.0" x2="72.0" y2="598.0" stroke="#7c3aed" stroke-width="2.4" marker-end="url(#arrowA)"/>
-  <text x="82.0" y="602.0" class="legend">主流程 / 派发</text>
-  <line x1="42.0" y1="620.0" x2="72.0" y2="620.0" stroke="#2563eb" stroke-width="2.4" marker-end="url(#arrowC)"/>
-  <text x="82.0" y="624.0" class="legend">读 SQLite</text>
-  <line x1="42.0" y1="642.0" x2="72.0" y2="642.0" stroke="#10b981" stroke-width="2.4" marker-end="url(#arrowB)"/>
-  <text x="82.0" y="646.0" class="legend">写存储</text>
-  <line x1="42.0" y1="664.0" x2="72.0" y2="664.0" stroke="#f97316" stroke-width="2.4" marker-end="url(#arrowE)"/>
-  <text x="82.0" y="668.0" class="legend">外部网络调用</text>
-  <text x="42.0" y="704.0" class="footnote">完全本地优先 · 仅 LLM 调用 / 平台抓取 / (无字幕时)语音识别走网络</text>
+  <line x1="42.0" y1="758.0" x2="72.0" y2="758.0" stroke="#7c3aed" stroke-width="2.4" marker-end="url(#arrowA)"/>
+  <text x="82.0" y="762.0" class="legend">主流程 / 派发</text>
+  <line x1="42.0" y1="780.0" x2="72.0" y2="780.0" stroke="#2563eb" stroke-width="2.4" marker-end="url(#arrowC)"/>
+  <text x="82.0" y="784.0" class="legend">读 SQLite</text>
+  <line x1="42.0" y1="802.0" x2="72.0" y2="802.0" stroke="#10b981" stroke-width="2.4" marker-end="url(#arrowB)"/>
+  <text x="82.0" y="806.0" class="legend">写存储</text>
+  <line x1="42.0" y1="824.0" x2="72.0" y2="824.0" stroke="#f97316" stroke-width="2.4" marker-end="url(#arrowE)"/>
+  <text x="82.0" y="828.0" class="legend">外部网络调用</text>
+  <text x="42.0" y="864.0" class="footnote">完全本地优先 · 仅 LLM 调用 / 平台抓取 / (无字幕时)语音识别走网络</text>
 </svg>
