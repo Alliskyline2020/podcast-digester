@@ -58,6 +58,7 @@ from .routers import admin as admin_router
 from .routers import export as export_router
 from .routers import subtitles as subtitles_router
 from .routers import episodes as episodes_router
+from .routers import llm_config as llm_config_router
 
 # 初始化logger
 logger = logging.getLogger(__name__)
@@ -134,6 +135,7 @@ app.include_router(admin_router.router)
 app.include_router(export_router.router)
 app.include_router(subtitles_router.router)
 app.include_router(episodes_router.router)
+app.include_router(llm_config_router.router)
 
 
 # ==================== 全局异常处理器 ====================
