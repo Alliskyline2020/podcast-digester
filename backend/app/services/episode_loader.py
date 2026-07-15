@@ -392,13 +392,17 @@ async def load_episode_bundle(episode_id: str) -> EpisodeBundle:
         if insights_file.exists():
             product_insights = load_json_with_callback(insights_file, lambda d: ProductInsights(**d))
 
-    # 加载 ingest_job（如果还在处理中）
+    # 加载 ingest_job（处理中或已失败时）。
+    # FAILED 也必须附 job：否则前端进度永远 0/7 —— 失败在第 N 步的 episode
+    # 应展示「已到达 N-1 步 + 失败」，而非误导性的 0/7（ep_1784027010762 的表现）。
+    # 前端 stageProgress.js 只看 current_stage + stages，故只要这里附上 job 进度即正确。
     ingest_job = None
     if episode.status in [
         EpisodeStatus.PENDING,
         EpisodeStatus.DOWNLOADING,
         EpisodeStatus.ASR_RUNNING,
         EpisodeStatus.LLM_RUNNING,
+        EpisodeStatus.FAILED,
     ]:
         job_data = await IngestJobRepository.get_by_id(episode_id)
         if job_data:

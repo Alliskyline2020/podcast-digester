@@ -151,3 +151,61 @@ async def test_loader_prefers_db_when_derived_rows_exist(tmp_path, monkeypatch):
 
     assert bundle.outline is not None
     assert len(bundle.outline.entries) == 2, "DB 命中时应取 DB 的 2 章, 不回退磁盘的 1 章"
+
+
+def _failed_episode_row() -> dict:
+    row = _episode_row()
+    row["status"] = "failed"
+    return row
+
+
+def _job_failed_at_insights() -> dict:
+    """失败在第 7 步 (product_insights) 的 ingest_job: 前 6 步已完成、有 stage 记录。"""
+    return {
+        "episode_id": EP_ID,
+        "current_stage": "product_insights",
+        "stages": [
+            {"name": "download", "status": "ready", "progress": 1.0,
+             "started_at": "2026-07-06T00:00:00", "completed_at": "2026-07-06T00:00:01"},
+            {"name": "transcribe", "status": "ready", "progress": 1.0},
+            {"name": "product_insights", "status": "failed", "progress": 0.0,
+             "error": "database is locked"},
+        ],
+        "created_at": "2026-07-06T00:00:00",
+        "updated_at": "2026-07-06T00:00:05",
+    }
+
+
+async def test_loader_attaches_ingest_job_for_failed_episode(tmp_path, monkeypatch):
+    """FAILED 的 episode 也必须带 ingest_job —— 否则前端进度永远 0/7。
+
+    ep_1784027010762 全程卡在 0/7 的根因: loader 只对 in-progress 状态附 job,
+    FAILED 被排除 → ingest_job=None → 前端 current_stage 为空 → 全部 7 步 todo → 0/7。
+    失败在第 7 步的 episode 应展示「已到达 6/7 + 失败」, 而非误导性的 0/7。
+    前端 stageProgress.js 只看 current_stage + stages、不看 episode.status,
+    故只要后端附上 job, 进度即正确。"""
+    monkeypatch.setattr(app.deps, "data_dir", tmp_path)
+    import app.services.episode_loader as L
+
+    monkeypatch.setattr(
+        L.EpisodeRepository, "get_by_id",
+        AsyncMock(return_value=_failed_episode_row()),
+    )
+    monkeypatch.setattr(
+        L.SourceRepository, "get_by_episode",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(L.OutlineRepository, "get", AsyncMock(return_value=None))
+    monkeypatch.setattr(L.SummariesRepository, "get", AsyncMock(return_value=None))
+    monkeypatch.setattr(L.HighlightRepository, "get", AsyncMock(return_value=None))
+    monkeypatch.setattr(L.ProductInsightsRepository, "get", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        L.IngestJobRepository, "get_by_id",
+        AsyncMock(return_value=_job_failed_at_insights()),
+    )
+
+    bundle = await load_episode_bundle(EP_ID)
+
+    assert bundle.ingest_job is not None, "FAILED episode 必须附 ingest_job, 否则前端 0/7"
+    assert bundle.ingest_job.current_stage == "product_insights"
+    assert len(bundle.ingest_job.stages) == 3
