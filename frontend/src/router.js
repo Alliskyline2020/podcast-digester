@@ -12,6 +12,11 @@ const routes = [
     component: () => import('@/views/PlayerView.vue'),
     props: true,
   },
+  {
+    path: '/settings',
+    name: 'settings',
+    component: () => import('@/views/SettingsView.vue'),
+  },
 ]
 
 const router = createRouter({
