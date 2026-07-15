@@ -299,7 +299,7 @@ podcast-digester/
 │   │   └── utils/               # stage progress / formatting
 │   └── tests/                   # Vitest
 ├── data/                        # SQLite + media/ep_* (gitignored)
-├── docs/                        # PRD / transcript-correction guide / intro deck
+├── docs/                        # transcript-correction guide
 └── start.sh / stop.sh           # one-click start/stop
 ```
 
@@ -335,9 +335,7 @@ cd frontend && npm test
 
 ## 📚 Docs
 
-- [`docs/PRD.md`](./docs/PRD.md) — Product requirements (Chinese)
 - [`docs/transcript-correction-guide.md`](./docs/transcript-correction-guide.md) — Transcript-correction guide (Chinese)
-- [`docs/presentation/`](./docs/presentation/) — Intro deck (Swiss-style, Chinese)
 - [`CONTRIBUTING.md`](./CONTRIBUTING.md) — Contribution guide
 
 ## 🙏 Acknowledgements

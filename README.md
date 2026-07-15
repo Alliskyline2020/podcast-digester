@@ -299,7 +299,7 @@ podcast-digester/
 │   │   └── utils/               # 阶段进度 / 格式化等
 │   └── tests/                   # Vitest
 ├── data/                        # SQLite + media/ep_*（gitignore，不入库）
-├── docs/                        # PRD / 字幕校正指南 / 项目介绍 PPT
+├── docs/                        # 字幕校正指南
 └── start.sh / stop.sh           # 一键启停
 ```
 
@@ -335,9 +335,7 @@ cd frontend && npm test
 
 ## 📚 文档
 
-- [`docs/PRD.md`](./docs/PRD.md) — 产品需求文档
 - [`docs/transcript-correction-guide.md`](./docs/transcript-correction-guide.md) — 字幕校正指南
-- [`docs/presentation/`](./docs/presentation/) — 项目介绍 PPT（瑞士风版）
 - [`CONTRIBUTING.md`](./CONTRIBUTING.md) — 贡献指南
 
 ## 🙏 致谢
