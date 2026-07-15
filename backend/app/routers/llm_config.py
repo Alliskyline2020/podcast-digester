@@ -108,6 +108,13 @@ async def test_llm_config(req: LLMConfigUpdate) -> dict:
     base = _resolve_config(require_key=False)
     provider = req.provider or base.provider
     provider_type = req.provider_type or infer_provider_type(provider)
+
+    # 验证 provider_type 是否合法（与 PUT 一致）
+    if req.provider_type and req.provider_type not in (
+        "openai_compatible", "anthropic_compatible"
+    ):
+        return {"ok": False, "detail": "provider_type 非法"}
+
     api_key = req.api_key or base.api_key
     base_url = req.base_url if req.base_url is not None else base.base_url
     model = req.model or base.model

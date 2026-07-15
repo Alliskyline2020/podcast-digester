@@ -182,6 +182,16 @@ async def test_init_db_creates_app_setting_table(temp_db):
     assert row[0] == "app_setting"
 
 
+@pytest.mark.database
+async def test_init_db_enables_wal_mode(temp_db):
+    """init_db 必须启用 WAL 模式以提升并发性能。"""
+    import aiosqlite
+    from app import database as _db
+    async with aiosqlite.connect(str(_db.DB_PATH)) as db:
+        mode = (await (await db.execute("PRAGMA journal_mode")).fetchone())[0]
+    assert mode.lower() == "wal"
+
+
 @pytest.mark.unit
 class TestSyncDbBusyTimeout:
     """同步连接必须设 busy_timeout —— 否则 async pipeline 收尾时

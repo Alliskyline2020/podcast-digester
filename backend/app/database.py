@@ -61,6 +61,10 @@ async def init_db():
     """初始化数据库表"""
     async with aiosqlite.connect(DB_PATH) as db:
         await db.executescript("""
+        -- 启用 WAL 模式以提升并发性能（跨进程读写安全）
+        PRAGMA journal_mode=WAL;
+        PRAGMA busy_timeout=30000;
+
         -- 节目表
         CREATE TABLE IF NOT EXISTS episode (
             id TEXT PRIMARY KEY,

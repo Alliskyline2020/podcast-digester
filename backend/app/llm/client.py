@@ -92,13 +92,13 @@ def _humanize_llm_error(err: Exception) -> str:
         return "API Key 无效或未授权（401）"
     if "403" in s or "forbidden" in s:
         return "拒绝访问（403），可能是 Key 无该模型权限"
-    if "404" in s or "model" in s and "not found" in s:
+    if "404" in s or ("model" in s and "not found" in s):
         return "模型名或端点不对（404）"
     if "timeout" in s or "timed out" in s:
         return "请求超时（检查网络或 base_url 是否可达）"
     if "connection" in s or "name or service" in s or "getaddrinfo" in s:
         return "无法连接到该 API 地址（域名不通 / base_url 错误）"
-    return f"请求失败：{err}"
+    return "请求失败（请检查 base_url / 模型名 / 网络）"
 
 
 async def ping_llm(cfg: LLMConfig) -> tuple[bool, str]:

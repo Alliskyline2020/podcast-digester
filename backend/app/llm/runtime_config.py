@@ -26,7 +26,8 @@ def read_runtime_override() -> dict:
         path = _db_path()
         if not path.exists():
             return {}
-        with sqlite3.connect(str(path)) as conn:
+        with sqlite3.connect(str(path), timeout=30.0) as conn:
+            conn.execute("PRAGMA busy_timeout=30000")
             row = conn.execute(
                 "SELECT value FROM app_setting WHERE key=?", (OVERRIDE_KEY,)
             ).fetchone()

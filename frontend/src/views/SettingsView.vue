@@ -96,9 +96,9 @@ function goBack() {
 function onProviderChange() {
   const p = providers.value[form.provider]
   if (!p) return
-  // 切 provider：自动填该预设的默认 base_url / model（用户可再手改）
-  form.base_url = p.default_base_url || ''
-  form.model = p.default_model || ''
+  // 仅在用户未自定义时填入预设默认，避免覆盖已有改动
+  if (!form.base_url) form.base_url = p.default_base_url || ''
+  if (!form.model) form.model = p.default_model || ''
 }
 
 async function load() {
@@ -122,7 +122,7 @@ async function load() {
 function buildPayload({ includeKeyIfAny }) {
   const body = {}
   if (form.provider) body.provider = form.provider
-  if (form.base_url !== null && form.base_url !== undefined) body.base_url = form.base_url
+  if (form.base_url) body.base_url = form.base_url
   if (form.model) body.model = form.model
   if (includeKeyIfAny && form.api_key.trim()) body.api_key = form.api_key.trim()
   return body
