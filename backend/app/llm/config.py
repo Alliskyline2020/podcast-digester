@@ -7,6 +7,7 @@
 """
 import ipaddress
 import os
+import socket
 from dataclasses import dataclass
 from typing import Optional
 from urllib.parse import urlparse
@@ -141,10 +142,21 @@ def resolve_effective_base_url(
 
 
 # ==================== SSRF 守卫 ====================
+# 云元数据 / CGNAT 显式拒绝名单：ipaddress.is_private 不覆盖 RFC 6598（100.64.0.0/10）
+# 与阿里云元数据 100.100.100.200，须显式拦截。
+_METADATA_NETWORKS = [
+    ipaddress.ip_network("169.254.169.254/32"),   # AWS / Azure / GCP 元数据
+    ipaddress.ip_network("100.100.100.200/32"),   # 阿里云 ECS 元数据
+    ipaddress.ip_network("100.64.0.0/10"),        # RFC 6598 CGNAT
+]
+
+
 def _assert_public_https_base_url(base_url: str) -> None:
-    """禁止把 LLM 请求打到内网/本机（参考 qmreader assertPublicHttpsBaseUrl）。
+    """禁止把 LLM 请求打到内网/本机/云元数据（参考 qmreader assertPublicHttpsBaseUrl）。
 
     空字符串放行（用 SDK 自带官方端点）。http 一律拒（LLM key 不可明文走 http）。
+    字面量 IP 走 ipaddress 直接分类——与 httpx 解析口径一致；且字面量不经 DNS，
+    消除「校验时解析公网、连接时 DNS 重绑定到内网」的 TOCTOU 窗口。
     """
     if not base_url:
         return
@@ -154,15 +166,25 @@ def _assert_public_https_base_url(base_url: str) -> None:
     host = parsed.hostname or ""
     if host.endswith(".local"):
         raise ValueError(f"base_url 禁止指向 .local：{base_url!r}")
+
+    # 字面量 IP 直接分类；主机名才走 DNS 解析所有 A/AAAA
     try:
-        # 解析所有 A/AAAA；任一落内网段即拒
-        infos = __import__("socket").getaddrinfo(host, None)
-    except OSError:
-        raise ValueError(f"base_url 主机无法解析：{host!r}")
-    for info in infos:
-        ip = ipaddress.ip_address(info[4][0])
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
-            raise ValueError(f"base_url 禁止指向内网/本机地址 {ip}：{base_url!r}")
+        resolved = [ipaddress.ip_address(host)]
+    except ValueError:
+        # 仅含数字与点却非合法 IPv4 字面量（如 0177.0.0.1 / 2130706433）：
+        # getaddrinfo 可能按八进制/十进制解出公网地址、与 httpx 口径不一致 → 可疑，直接拒。
+        if host and all(c.isdigit() or c == "." for c in host):
+            raise ValueError(f"base_url 主机为可疑 IP 字面量：{host!r}")
+        try:
+            infos = socket.getaddrinfo(host, None)
+        except OSError:
+            raise ValueError(f"base_url 主机无法解析：{host!r}")
+        resolved = [ipaddress.ip_address(info[4][0]) for info in infos]
+
+    for ip in resolved:
+        if (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
+                or any(ip in net for net in _METADATA_NETWORKS)):
+            raise ValueError(f"base_url 禁止指向内网/本机/元数据地址 {ip}：{base_url!r}")
 
 
 # ==================== 统一配置读取 ====================

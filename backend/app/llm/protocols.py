@@ -10,6 +10,8 @@ response_format) -> LLMResponse，使 client.complete() 可按 provider_type 无
 from dataclasses import dataclass
 from typing import Optional
 
+import httpx
+
 from .cost import cost
 
 
@@ -27,7 +29,13 @@ class OpenAIAdapter:
 
     def __init__(self, api_key: str, base_url: str, timeout: float):
         from openai import AsyncOpenAI
-        kwargs = {"api_key": api_key, "timeout": timeout}
+        kwargs = {
+            "api_key": api_key,
+            "timeout": timeout,
+            # 关闭重定向：防恶意兼容端点 302 → 内网/云元数据，
+            # httpx 跨域重定向只剥 Authorization/Cookie、不剥 x-api-key，会拖走 LLM Key。
+            "http_client": httpx.AsyncClient(follow_redirects=False),
+        }
         if base_url:
             kwargs["base_url"] = base_url
         self._client = AsyncOpenAI(**kwargs)
@@ -103,7 +111,13 @@ class AnthropicAdapter:
 
     def __init__(self, api_key: str, base_url: str, timeout: float):
         from anthropic import AsyncAnthropic
-        kwargs = {"api_key": api_key, "timeout": timeout}
+        kwargs = {
+            "api_key": api_key,
+            "timeout": timeout,
+            # 关闭重定向：防恶意兼容端点 302 → 内网/云元数据，
+            # httpx 跨域重定向只剥 Authorization/Cookie、不剥 x-api-key，会拖走 LLM Key。
+            "http_client": httpx.AsyncClient(follow_redirects=False),
+        }
         if base_url:
             kwargs["base_url"] = base_url
         self._client = AsyncAnthropic(**kwargs)

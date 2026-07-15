@@ -156,3 +156,31 @@ async def test_anthropic_adapter_normalizes_stop_reasons(monkeypatch):
             temperature=0.3, max_tokens=100, response_format=None,
         )
         assert resp.finish_reason == want
+
+
+# ---------- 安全：SDK 客户端不得跟随重定向 ----------
+# openai/anthropic SDK 默认 follow_redirects=True（实测 openai 2.41.0）。恶意兼容端点
+# 可 302 → 内网/云元数据，httpx 跨域重定向只剥 Authorization/Cookie、不剥 x-api-key，
+# 导致 LLM Key 被拖到内网目标。构造 SDK 客户端时强制关闭重定向。
+
+def test_openai_adapter_disables_redirects():
+    import httpx
+    adapter = OpenAIAdapter(api_key="sk-x", base_url="https://api.deepseek.com", timeout=30.0)
+    inner = adapter._client._client  # AsyncOpenAI._client -> httpx.AsyncClient
+    assert isinstance(inner, httpx.AsyncClient)
+    assert inner.follow_redirects is False
+
+
+def test_anthropic_adapter_disables_redirects():
+    # 当前环境 anthropic SDK 与 httpx 版本失配（proxies kwarg），构造可能失败；
+    # 依赖修复后此测试锁定「不跟随重定向」，失配时跳过并在汇报中单独标记。
+    import httpx
+    try:
+        adapter = AnthropicAdapter(api_key="sk-x", base_url="https://api.anthropic.com", timeout=30.0)
+    except TypeError as e:
+        if "proxies" in str(e):
+            pytest.skip("anthropic SDK/httpx 版本失配，待修复依赖（见汇报）")
+        raise
+    inner = adapter._client._client  # AsyncAnthropic._client -> httpx.AsyncClient
+    assert isinstance(inner, httpx.AsyncClient)
+    assert inner.follow_redirects is False

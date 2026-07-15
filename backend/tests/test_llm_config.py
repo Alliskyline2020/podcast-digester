@@ -95,6 +95,45 @@ def test_ssrf_guard_allows_public_https(clean_llm_env, monkeypatch):
     assert cfg.base_url == "https://8.8.8.8"
 
 
+# ==================== SSRF 加固：云元数据 / 字面量 IP（防重定向外的补充）====================
+
+def test_ssrf_guard_blocks_alibaba_metadata(clean_llm_env, monkeypatch):
+    # 阿里云 ECS 元数据 100.100.100.200：is_private 不覆盖，须显式拒绝
+    monkeypatch.setenv("LLM_API_KEY", "sk-x")
+    monkeypatch.setenv("LLM_BASE_URL", "https://100.100.100.200")
+    with pytest.raises(ValueError, match="base_url"):
+        get_config()
+
+
+def test_ssrf_guard_blocks_cgnat_range(clean_llm_env, monkeypatch):
+    # RFC 6598 CGNAT 100.64.0.0/10：is_private 不覆盖，须显式拒绝
+    monkeypatch.setenv("LLM_API_KEY", "sk-x")
+    monkeypatch.setenv("LLM_BASE_URL", "https://100.64.10.20")
+    with pytest.raises(ValueError, match="base_url"):
+        get_config()
+
+
+def test_ssrf_guard_blocks_suspicious_ip_literal(clean_llm_env, monkeypatch):
+    # 0177.0.0.1 这类带前导零的「伪字面量」：getaddrinfo 会当成公网 177.0.0.1 放行，
+    # 但 httpx 可能按八进制解析 → guard 与客户端解析不一致的隐患，直接拒。
+    monkeypatch.setenv("LLM_API_KEY", "sk-x")
+    monkeypatch.setenv("LLM_BASE_URL", "https://0177.0.0.1")
+    with pytest.raises(ValueError, match="base_url"):
+        get_config()
+
+
+def test_ssrf_guard_literal_ip_skips_dns(clean_llm_env, monkeypatch):
+    # 字面量公网 IP 不走 DNS：消除 check / use 之间的 rebinding 窗口
+    import app.llm.config as cfgmod
+    def _boom(*a, **k):
+        raise OSError("字面量 IP 不应触发 DNS 解析")
+    monkeypatch.setattr(cfgmod.socket, "getaddrinfo", _boom)
+    monkeypatch.setenv("LLM_API_KEY", "sk-x")
+    monkeypatch.setenv("LLM_BASE_URL", "https://8.8.8.8")
+    cfg = get_config()  # 不抛，且不调 getaddrinfo
+    assert cfg.base_url == "https://8.8.8.8"
+
+
 # ==================== 运行时覆写测试 ====================
 
 @pytest.fixture
