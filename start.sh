@@ -24,7 +24,7 @@ fi
 if [ ! -f "$BACKEND_DIR/.env" ]; then
     echo "⚠️  后端.env不存在，正在从.env.example创建..."
     cp "$BACKEND_DIR/.env.example" "$BACKEND_DIR/.env"
-    echo "   请编辑 $BACKEND_DIR/.env 并配置 DEEPSEEK_API_KEY"
+    echo "   请编辑 $BACKEND_DIR/.env 并配置 LLM_API_KEY（默认 provider=deepseek）"
 fi
 
 # 检查前端依赖

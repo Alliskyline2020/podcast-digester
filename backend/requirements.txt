@@ -1,5 +1,5 @@
 # Backend Requirements
-# Python 3.11+
+# Python 3.11–3.13（3.14 暂不兼容：faster-whisper→av、pydantic-core、greenlet 缺预编译 wheel）
 
 # FastAPI and server
 fastapi==0.115.0
@@ -16,6 +16,8 @@ anthropic==0.39.0
 
 # ASR
 faster-whisper==1.0.3
+# faster-whisper 1.0.3 的 utils.py 用到 requests 却未声明依赖（上游打包遗漏），需显式补上
+requests>=2.31,<3
 
 # yt-dlp for media download
 yt-dlp==2025.1.26
