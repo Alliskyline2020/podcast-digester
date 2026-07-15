@@ -2,16 +2,20 @@
 import pytest
 
 from app.llm.config import (
-    PROVIDERS, get_config, infer_provider_type, LLMConfig,
+    PROVIDERS, get_config, infer_provider_type, LLMConfig, _resolve_config,
 )
 
 
 @pytest.fixture
 def clean_llm_env(monkeypatch):
-    """清空所有 LLM/DEEPSEEK 环境变量，每个用例显式 set 需要的。"""
+    """清空所有 LLM/DEEPSEEK 环境变量，并把运行时覆写 DB 指向不存在的路径，
+    使 get_config() 在单测里只受 env 影响（不被真实库里的覆写污染）。"""
+    from pathlib import Path
     for k in list(__import__("os").environ):
         if k.startswith(("LLM_", "DEEPSEEK_")):
             monkeypatch.delenv(k, raising=False)
+    from app import database as _db
+    monkeypatch.setattr(_db, "DB_PATH", Path("/tmp/pd-nonexistent-clellm.db"))
     return monkeypatch
 
 
@@ -88,3 +92,45 @@ def test_ssrf_guard_allows_public_https(clean_llm_env, monkeypatch):
     monkeypatch.setenv("LLM_BASE_URL", "https://8.8.8.8")
     cfg = get_config()  # 不抛
     assert cfg.base_url == "https://8.8.8.8"
+
+
+# ==================== 运行时覆写测试 ====================
+
+@pytest.fixture
+async def override_env(temp_db, monkeypatch):
+    """temp_db（带 app_setting 表的真实临时库）+ 清空 env，供覆写测试用。"""
+    for k in list(__import__("os").environ):
+        if k.startswith(("LLM_", "DEEPSEEK_")):
+            monkeypatch.delenv(k, raising=False)
+    return monkeypatch
+
+
+@pytest.mark.database
+async def test_override_in_db_takes_effect(override_env, monkeypatch):
+    monkeypatch.setenv("LLM_API_KEY", "sk-env")
+    monkeypatch.setenv("LLM_PROVIDER", "deepseek")
+    from app.llm.runtime_config import write_runtime_override
+    await write_runtime_override({"provider": "openai", "api_key": "sk-db"})
+    cfg = get_config()
+    assert cfg.provider == "openai"
+    assert cfg.api_key == "sk-db"
+
+
+@pytest.mark.database
+async def test_override_partial_fields_keep_env_defaults(override_env, monkeypatch):
+    monkeypatch.setenv("LLM_API_KEY", "sk-env")
+    monkeypatch.setenv("LLM_MODEL", "deepseek-chat")
+    from app.llm.runtime_config import write_runtime_override
+    await write_runtime_override({"base_url": "https://api.openai.com"})
+    cfg = get_config()
+    # 未被覆写的字段仍来自 env
+    assert cfg.api_key == "sk-env"
+    assert cfg.model == "deepseek-chat"
+    assert cfg.base_url == "https://api.openai.com"
+
+
+@pytest.mark.unit
+def test_resolve_config_no_require_key_does_not_raise(clean_llm_env):
+    # 无 key 也不抛，供 GET 端点加载页面用
+    cfg = _resolve_config(require_key=False)
+    assert cfg.api_key == ""

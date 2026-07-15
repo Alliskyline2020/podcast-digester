@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from typing import Optional
 from urllib.parse import urlparse
 
+from .runtime_config import read_runtime_override
+
 logger = __import__("logging").getLogger(__name__)
 
 
@@ -124,38 +126,56 @@ def _assert_public_https_base_url(base_url: str) -> None:
 
 
 # ==================== 统一配置读取 ====================
-def get_config() -> LLMConfig:
-    """从环境变量读取并校验 LLM 配置。
+def _resolve_config(require_key: bool = True) -> LLMConfig:
+    """解析 LLM 配置。
 
-    优先级：LLM_* > DEEPSEEK_*（向后兼容别名）> PROVIDERS[provider] 默认值。
+    优先级：运行时覆写(app_setting) > LLM_* 环境变量 > DEEPSEEK_* 别名 > PROVIDERS 预设默认。
+
+    require_key=False 时不强制 api_key（供「设置页」在未配置时也能加载）。
     """
-    provider = os.getenv("LLM_PROVIDER", "deepseek")
+    override = read_runtime_override()
 
-    # 显式 LLM_PROVIDER_TYPE 胜出；否则从 provider 推断
-    provider_type = os.getenv("LLM_PROVIDER_TYPE") or infer_provider_type(provider)
+    provider = override.get("provider") or os.getenv("LLM_PROVIDER", "deepseek")
+    provider_type = (
+        override.get("provider_type")
+        or os.getenv("LLM_PROVIDER_TYPE")
+        or infer_provider_type(provider)
+    )
 
-    # API key / base_url / model：LLM_* 优先，回退 DEEPSEEK_* 别名，再回退 registry 默认
-    api_key = os.getenv("LLM_API_KEY") or os.getenv("DEEPSEEK_API_KEY", "")
     preset = PROVIDERS.get(provider, {})
-    base_url = (
-        os.getenv("LLM_BASE_URL")
-        or os.getenv("DEEPSEEK_BASE_URL", "")
-        or preset.get("default_base_url", "")
-    )
-    model = (
-        os.getenv("LLM_MODEL")
-        or os.getenv("DEEPSEEK_MODEL", "")
-        or preset.get("default_model", "")
-    )
+
+    # api_key：覆写里有就用覆写；否则 env 链
+    if "api_key" in override:
+        api_key = override.get("api_key") or ""
+    else:
+        api_key = os.getenv("LLM_API_KEY") or os.getenv("DEEPSEEK_API_KEY", "")
+
+    if "base_url" in override:
+        base_url = override.get("base_url") or preset.get("default_base_url", "")
+    else:
+        base_url = (
+            os.getenv("LLM_BASE_URL")
+            or os.getenv("DEEPSEEK_BASE_URL", "")
+            or preset.get("default_base_url", "")
+        )
+
+    if "model" in override:
+        model = override.get("model") or preset.get("default_model", "")
+    else:
+        model = (
+            os.getenv("LLM_MODEL")
+            or os.getenv("DEEPSEEK_MODEL", "")
+            or preset.get("default_model", "")
+        )
 
     temperature = float(os.getenv("LLM_TEMPERATURE", "0.3"))
     max_tokens_raw = os.getenv("LLM_MAX_TOKENS")
     max_tokens = int(max_tokens_raw) if max_tokens_raw else None
     timeout = float(os.getenv("LLM_TIMEOUT", "60"))
 
-    if not api_key:
+    if require_key and not api_key:
         raise ValueError(
-            "LLM_API_KEY 未配置（也可用旧名 DEEPSEEK_API_KEY）。请在环境变量中设置。"
+            "LLM_API_KEY 未配置（也可用旧名 DEEPSEEK_API_KEY）。请在环境变量或设置页中设置。"
         )
     _assert_public_https_base_url(base_url)
 
@@ -169,3 +189,8 @@ def get_config() -> LLMConfig:
         max_tokens=max_tokens,
         timeout=timeout,
     )
+
+
+def get_config() -> LLMConfig:
+    """从环境变量 + 运行时覆写读取并校验 LLM 配置（要求 api_key）。"""
+    return _resolve_config(require_key=True)
