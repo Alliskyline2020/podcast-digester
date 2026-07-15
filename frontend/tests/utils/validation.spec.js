@@ -63,6 +63,18 @@ describe('validatePodcastInput', () => {
       const r = validatePodcastInput('http://www.youtube.com/watch?v=abc')
       expect(r.ok).toBe(true)
     })
+
+    // 小宇宙的真实主域是 xiaoyuzhoufm.com（xiaoyuzhou.com 是别名）。
+    // 单集 id 是 24 位 hex，不是纯数字。回归：用户上报解析不了的链接。
+    it.each([
+      'https://www.xiaoyuzhoufm.com/episode/6a26b614a1049eb63a9b23e2',
+      'https://xiaoyuzhoufm.com/episode/6a26b614a1049eb63a9b23e2',
+      'https://podcast.xiaoyuzhoufm.com/episode/6a26b614a1049eb63a9b23e2',
+    ])('accepts xiaoyuzhoufm.com link %s', (url) => {
+      const r = validatePodcastInput(url)
+      expect(r.ok).toBe(true)
+      expect(r.normalized).toBe(url)
+    })
   })
 
   describe('URL branch — unsupported hosts', () => {

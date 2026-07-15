@@ -22,8 +22,8 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from .. import deps
-from ..config import DB_PATH, settings
-from ..database import EpisodeRepository, UsageLogRepository
+from ..config import settings
+from ..database import EpisodeRepository, UsageLogRepository, _connect
 from ..ingest import run_ingest
 from ..models import (
     ConfidenceType,
@@ -133,7 +133,7 @@ async def paste_episode(
 
     # 使用事务确保创建操作的原子性
     try:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with _connect() as db:
             await db.execute("BEGIN")
 
             # 创建 episode 记录
@@ -196,7 +196,7 @@ def _source_label_from(raw_input: str, source_type_db: Optional[str] = None) -> 
             return "YouTube"
         if "bilibili.com" in raw:
             return "B站"
-        if "xiaoyuzhou.com" in raw:
+        if "xiaoyuzhou.com" in raw or "xiaoyuzhoufm.com" in raw:
             return "小宇宙"
         if "douyin.com" in raw:
             return "抖音"
@@ -233,7 +233,7 @@ async def _batch_load_source_labels(
     result: Dict[str, tuple[Optional[str], Optional[str]]] = {}
     placeholders = ",".join("?" * len(episode_ids))
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         # 1. source 表：解析器登记的来源
         async with db.execute(
             f"SELECT episode_id, source_type, raw_input FROM source WHERE episode_id IN ({placeholders})",
@@ -387,7 +387,7 @@ async def delete_episode(episode_id: str) -> DeleteResponse:
 
     # 使用事务确保删除操作的原子性
     try:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with _connect() as db:
             await db.execute("BEGIN")
 
             # 删除数据库记录（会级联删除相关记录）
@@ -564,7 +564,7 @@ async def resume_episode(episode_id: str, request: ResumeRequest) -> ResumeRespo
         else:
             # 早期失败的任务可能 pipeline 还没来得及写 source 表，
             # 回退到 usage_log（paste 一定写过 raw_input）
-            async with aiosqlite.connect(DB_PATH) as db:
+            async with _connect() as db:
                 async with db.execute(
                     "SELECT payload_json FROM usage_log "
                     "WHERE episode_id = ? AND event_type = 'paste' "

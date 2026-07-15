@@ -24,9 +24,13 @@ const SUPPORTED_HOSTS = [
   'douyin.com',
   'www.douyin.com',
   'v.douyin.com',
+  // 小宇宙真实主域是 xiaoyuzhoufm.com，xiaoyuzhou.com 是其别名，两者都要放行
   'xiaoyuzhou.com',
   'www.xiaoyuzhou.com',
   'podcast.xiaoyuzhou.com',
+  'xiaoyuzhoufm.com',
+  'www.xiaoyuzhoufm.com',
+  'podcast.xiaoyuzhoufm.com',
 ]
 
 /**
