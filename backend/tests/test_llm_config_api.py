@@ -58,7 +58,9 @@ async def test_put_without_api_key_keeps_old(cfg_env, monkeypatch):
 
 @pytest.mark.api
 async def test_put_rejects_ssrf_base_url(cfg_env, monkeypatch):
+    # SSRF 只对可编辑(自定义端点) provider 生效；锁定型 base_url 被强制为预设默认
     resp = _client().put("/api/admin/llm-config", json={
+        "provider": "openai-compatible", "provider_type": "openai_compatible",
         "api_key": "sk-x", "base_url": "http://127.0.0.1:8080",
     })
     assert resp.status_code == 400
@@ -121,13 +123,43 @@ async def test_models_endpoint_failure_detail(cfg_env, monkeypatch):
 
 @pytest.mark.api
 async def test_models_endpoint_ssrf_blocked(cfg_env, monkeypatch):
+    # SSRF 只对可编辑 provider 生效；锁定型 base_url 被强制为预设默认
     resp = _client().post("/api/admin/llm-config/models", json={
-        "api_key": "sk-x", "base_url": "http://127.0.0.1:8080", "provider": "deepseek",
+        "api_key": "sk-x", "base_url": "http://127.0.0.1:8080",
+        "provider": "openai-compatible", "provider_type": "openai_compatible",
     })
     assert resp.status_code == 200
     body = resp.json()
     assert body["ok"] is False
     assert "base_url" in body["detail"]
+
+
+@pytest.mark.api
+async def test_models_endpoint_locked_provider_ignores_form_base_url(cfg_env, monkeypatch):
+    # 锁定型 provider：前端传入的恶意 base_url 被忽略，实际用预设默认（防篡改）
+    captured = {}
+    import app.routers.llm_config as router
+    async def _spy(cfg):
+        captured["base_url"] = cfg.base_url
+        return True, ["deepseek-chat"]
+    monkeypatch.setattr(router, "list_models", _spy)
+    resp = _client().post("/api/admin/llm-config/models", json={
+        "api_key": "sk-x", "base_url": "http://127.0.0.1/evil", "provider": "deepseek",
+    })
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    assert captured["base_url"] == "https://api.deepseek.com"   # 非恶意 url
+
+
+@pytest.mark.api
+async def test_put_locked_provider_forces_default_base_url(cfg_env, monkeypatch):
+    # 锁定型 provider 即便提交别的 base_url，存进去的也是预设默认
+    _client().put("/api/admin/llm-config", json={
+        "provider": "deepseek", "api_key": "sk-x",
+        "base_url": "http://127.0.0.1/evil",   # 应被忽略
+    })
+    body = _client().get("/api/admin/llm-config").json()
+    assert body["base_url"] == "https://api.deepseek.com"
 
 
 @pytest.mark.api
@@ -138,12 +170,27 @@ async def test_models_endpoint_no_key(cfg_env, monkeypatch):
 
 
 @pytest.mark.api
-async def test_get_returns_base_urls_and_editable(cfg_env, monkeypatch):
+async def test_get_returns_editable_flag_and_glm_coding(cfg_env, monkeypatch):
     from app.llm.runtime_config import write_runtime_override
     await write_runtime_override({"provider": "glm", "api_key": "sk-glm"})
     body = _client().get("/api/admin/llm-config").json()
     glm = body["providers"]["glm"]
-    assert "https://open.bigmodel.cn/api/coding/paas/v4" in glm["base_urls"]
     assert glm["base_url_editable"] is False
+    assert glm["default_base_url"] == "https://open.bigmodel.cn/api/paas/v4"
+    assert "base_urls" not in glm   # 多选下拉机制已移除
+    # 编码套件是独立 provider，固定 coding 端点
+    coding = body["providers"]["glm-coding"]
+    assert coding["default_base_url"] == "https://open.bigmodel.cn/api/coding/paas/v4"
+    assert coding["base_url_editable"] is False
+    # 兼容自定义端点仍可编辑
     assert body["providers"]["openai-compatible"]["base_url_editable"] is True
-    assert body["providers"]["openai-compatible"]["base_urls"] == []
+
+
+@pytest.mark.api
+async def test_get_exposes_region(cfg_env, monkeypatch):
+    from app.llm.runtime_config import write_runtime_override
+    await write_runtime_override({"provider": "deepseek", "api_key": "sk-x"})
+    body = _client().get("/api/admin/llm-config").json()
+    assert body["providers"]["deepseek"]["region"] == "国内"
+    assert body["providers"]["openai"]["region"] == "国际"
+    assert body["providers"]["openai-compatible"]["region"] == ""

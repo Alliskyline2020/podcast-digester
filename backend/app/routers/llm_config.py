@@ -12,7 +12,7 @@ from ..deps import verify_admin
 from ..llm.client import ping_llm, list_models
 from ..llm.config import (
     PROVIDERS, _resolve_config, _assert_public_https_base_url, infer_provider_type,
-    provider_base_urls,
+    provider_base_url_editable, resolve_effective_base_url,
 )
 from ..llm.runtime_config import read_runtime_override, write_runtime_override
 
@@ -44,9 +44,9 @@ def _public_providers() -> dict:
             "title": p["title"],
             "provider_type": p["provider_type"],
             "default_base_url": p["default_base_url"],
-            "base_urls": provider_base_urls(name),
-            "base_url_editable": not provider_base_urls(name),
+            "base_url_editable": provider_base_url_editable(name),
             "default_model": p["default_model"],
+            "region": p.get("region", ""),
         }
         for name, p in PROVIDERS.items()
     }
@@ -72,24 +72,31 @@ async def get_llm_config() -> dict:
 @router.put("/api/admin/llm-config")
 async def put_llm_config(req: LLMConfigUpdate) -> dict:
     """写入运行时覆写。未提供 api_key 时保留旧值。"""
-    if req.base_url:
-        try:
-            _assert_public_https_base_url(req.base_url)
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
     if req.provider_type and req.provider_type not in (
         "openai_compatible", "anthropic_compatible"
     ):
         raise HTTPException(status_code=400, detail="provider_type 非法")
 
     override = read_runtime_override() or {}
-    for field in ("provider", "provider_type", "base_url", "model"):
+    for field in ("provider", "provider_type", "model"):
         val = getattr(req, field)
         if val:
             override[field] = val
     # api_key：仅在用户真的填了新值时覆盖（None/空 = 保持不变）
     if req.api_key:
         override["api_key"] = req.api_key
+
+    # base_url：锁定型 provider 强制预设默认（防篡改）；可编辑型用表单值。
+    # 再过 SSRF 守卫（兼容型用户自填的端点必须 https 且非内网）。
+    provider = override.get("provider") or "deepseek"
+    effective_base_url = resolve_effective_base_url(
+        provider, req.base_url, override.get("base_url", ""))
+    if effective_base_url:
+        try:
+            _assert_public_https_base_url(effective_base_url)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+    override["base_url"] = effective_base_url
 
     await write_runtime_override(override)
     logger.info("LLM 配置已更新（provider=%s）", override.get("provider"))
@@ -119,11 +126,11 @@ async def test_llm_config(req: LLMConfigUpdate) -> dict:
         return {"ok": False, "detail": "provider_type 非法"}
 
     api_key = req.api_key or base.api_key
-    base_url = req.base_url if req.base_url is not None else base.base_url
-    model = req.model or base.model
-
     if not api_key:
         return {"ok": False, "detail": "未填写 API Key"}
+    # base_url：锁定型 provider 强制预设默认；可编辑型用表单值；再过 SSRF 守卫
+    base_url = resolve_effective_base_url(provider, req.base_url, base.base_url)
+    model = req.model or base.model
     if base_url:
         try:
             _assert_public_https_base_url(base_url)
@@ -154,10 +161,10 @@ async def list_llm_models(req: LLMConfigUpdate) -> dict:
         return {"ok": False, "detail": "provider_type 非法"}
 
     api_key = req.api_key or base.api_key
-    base_url = req.base_url if req.base_url is not None else base.base_url
-
     if not api_key:
         return {"ok": False, "detail": "未填写 API Key"}
+    # base_url：锁定型 provider 强制预设默认；可编辑型用表单值；再过 SSRF 守卫
+    base_url = resolve_effective_base_url(provider, req.base_url, base.base_url)
     if base_url:
         try:
             _assert_public_https_base_url(base_url)

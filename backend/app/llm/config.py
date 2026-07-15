@@ -17,80 +17,84 @@ logger = __import__("logging").getLogger(__name__)
 
 
 # ==================== PROVIDERS 预设表 ====================
-# 每个条目：title(展示名) / provider_type(协议) / default_base_url / base_urls / default_model
-# base_url 留空 = 用 SDK 自带默认（OpenAI / Anthropic 官方端点）。
+# 每个条目：title(展示名) / provider_type(协议) / default_base_url / default_model / region
+# 设计：1 provider = 1 固定 base_url。不同端点/套餐拆成独立 provider
+# （如「智谱 GLM」标准端点 vs「智谱 GLM Coding Plan」编码套件端点）。
+# default_base_url 留空 = 兼容自定义端点，base_url 可由用户自由填写。
+# region：国内/国际 用于设置页区域筛选；空 = 兼容自定义端点（地区无关，常驻底部）。
 # URL 与模型名以厂商官方文档为准（impl 时已核对）。
 PROVIDERS: dict[str, dict] = {
     "deepseek": {
         "title": "DeepSeek",
         "provider_type": "openai_compatible",
         "default_base_url": "https://api.deepseek.com",
-        "base_urls": ["https://api.deepseek.com"],
         "default_model": "deepseek-chat",
+        "region": "国内",
     },
     "openai": {
         "title": "OpenAI",
         "provider_type": "openai_compatible",
         "default_base_url": "https://api.openai.com/v1",
-        "base_urls": ["https://api.openai.com/v1"],
         "default_model": "gpt-4o-mini",
+        "region": "国际",
     },
     "anthropic": {
         "title": "Anthropic (Claude)",
         "provider_type": "anthropic_compatible",
         "default_base_url": "https://api.anthropic.com",
-        "base_urls": ["https://api.anthropic.com"],
         "default_model": "claude-3-5-sonnet-latest",
+        "region": "国际",
     },
     "glm": {
         "title": "智谱 GLM",
         "provider_type": "openai_compatible",
-        "default_base_url": "https://open.bigmodel.cn/api/paas/v4",
-        "base_urls": [
-            "https://open.bigmodel.cn/api/paas/v4",          # 标准
-            "https://open.bigmodel.cn/api/coding/paas/v4",   # 编码套件(Coding)
-        ],
+        "default_base_url": "https://open.bigmodel.cn/api/paas/v4",          # 标准端点
         "default_model": "glm-4-flash",
+        "region": "国内",
+    },
+    "glm-coding": {
+        "title": "智谱 GLM Coding Plan",
+        "provider_type": "openai_compatible",
+        "default_base_url": "https://open.bigmodel.cn/api/coding/paas/v4",   # 编码套件(Coding)专用端点
+        "default_model": "",   # 套餐模型需拉取后选择
+        "region": "国内",
     },
     "qwen": {
         "title": "通义千问",
         "provider_type": "openai_compatible",
         "default_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "base_urls": ["https://dashscope.aliyuncs.com/compatible-mode/v1"],
         "default_model": "qwen-plus",
+        "region": "国内",
     },
     "doubao": {
         "title": "字节豆包",
         "provider_type": "openai_compatible",
         "default_base_url": "https://ark.cn-beijing.volces.com/api/v3",
-        "base_urls": ["https://ark.cn-beijing.volces.com/api/v3"],
         # 豆包模型 id 实为 endpoint id，需用户在火山控制台创建后填入（模型下拉会拉不到，走手动输入）
         "default_model": "",
+        "region": "国内",
     },
     "moonshot": {
         "title": "月之暗面 Kimi",
         "provider_type": "openai_compatible",
         "default_base_url": "https://api.moonshot.cn/v1",
-        "base_urls": [
-            "https://api.moonshot.cn/v1",   # 国内
-            "https://api.moonshot.ai/v1",   # 海外
-        ],
         "default_model": "moonshot-v1-8k",
+        "region": "国内",
     },
-    # 通用兜底：用户自填 base_url / model（无锁定列表 → 前端自由输入）
+    # 通用兜底：用户自填 base_url / model（default_base_url 空 = 可自由输入；region 空 = 地区无关）
     "openai-compatible": {
         "title": "OpenAI 兼容(自定义端点)",
         "provider_type": "openai_compatible",
         "default_base_url": "",
-        "base_urls": [],
         "default_model": "",
+        "region": "",
     },
     "anthropic-compatible": {
         "title": "Anthropic 兼容(自定义端点)",
         "provider_type": "anthropic_compatible",
         "default_base_url": "",
-        "base_urls": [],
         "default_model": "",
+        "region": "",
     },
 }
 
@@ -115,10 +119,25 @@ def infer_provider_type(provider: str) -> str:
     return entry["provider_type"]
 
 
-def provider_base_urls(provider: str) -> list[str]:
-    """该 provider 的固定 base_url 下拉列表。空列表 = 用户可自由输入。"""
-    entry = PROVIDERS.get(provider, {})
-    return list(entry.get("base_urls", []))
+def provider_base_url_editable(provider: str) -> bool:
+    """该 provider 的 base_url 是否可由用户自由填写。
+    命名厂商(default_base_url 非空) = 锁定为预设 url；兼容自定义端点(空) = 可编辑。
+    未知 provider 视为可编辑（自由输入）。"""
+    return not bool(PROVIDERS.get(provider, {}).get("default_base_url"))
+
+
+def resolve_effective_base_url(
+    provider: str, form_base_url: str | None, saved_base_url: str
+) -> str:
+    """解析实际生效的 base_url。
+
+    锁定型 provider 一律返回预设 default_base_url（忽略表单/已保存值，防篡改，
+    与前端只读展示一致）；可编辑型用表单值，缺省回退已保存值。
+    返回值仍需在各端点过 SSRF 守卫（见 _assert_public_https_base_url）。
+    """
+    if provider_base_url_editable(provider):
+        return form_base_url if form_base_url else saved_base_url
+    return PROVIDERS.get(provider, {}).get("default_base_url", "")
 
 
 # ==================== SSRF 守卫 ====================
@@ -171,6 +190,9 @@ def _resolve_config(require_key: bool = True) -> LLMConfig:
     else:
         api_key = os.getenv("LLM_API_KEY") or os.getenv("DEEPSEEK_API_KEY", "")
 
+    # base_url：DB 覽写 > LLM_* env > DEEPSEEK_* 别名 > 预设默认。
+    # 注意：锁定型 provider 的「固定 url」只约束设置页 UI + PUT 写入；
+    # 这里仍保留 LLM_BASE_URL 环境变量作为运维逃生舱（如企业代理/镜像网关）。
     if "base_url" in override:
         base_url = override.get("base_url") or preset.get("default_base_url", "")
     else:

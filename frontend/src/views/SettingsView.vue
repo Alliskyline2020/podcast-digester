@@ -14,8 +14,17 @@
     <section v-if="loaded" class="settings-form">
       <div class="field">
         <label for="provider">Provider</label>
+        <div class="region-switch" role="group" aria-label="厂商地区">
+          <label><input type="radio" value="国内" v-model="region" /> 国内</label>
+          <label><input type="radio" value="国际" v-model="region" /> 国际</label>
+        </div>
         <select id="provider" v-model="form.provider" @change="onProviderChange">
-          <option v-for="(p, key) in providers" :key="key" :value="key">{{ p.title || key }}</option>
+          <optgroup :label="region">
+            <option v-for="(p, key) in namedProvidersInRegion" :key="key" :value="key">{{ p.title || key }}</option>
+          </optgroup>
+          <optgroup label="自定义兼容端点">
+            <option v-for="(p, key) in compatProviders" :key="key" :value="key">{{ p.title || key }}</option>
+          </optgroup>
         </select>
       </div>
 
@@ -39,11 +48,13 @@
 
       <div class="field">
         <label for="base-url">API 链接（base_url）</label>
-        <select v-if="!baseUrlEditable" id="base-url" data-test="base-url" v-model="form.base_url">
-          <option v-for="u in baseUrlOptions" :key="u" :value="u">{{ u }}</option>
-        </select>
-        <input v-else id="base-url" data-test="base-url" v-model="form.base_url"
-               placeholder="https://your-endpoint/v1" />
+        <input v-if="baseUrlEditable" id="base-url" data-test="base-url"
+               v-model="form.base_url" placeholder="https://your-endpoint/v1" />
+        <input v-else id="base-url" data-test="base-url" readonly class="readonly-url"
+               :value="form.base_url" title="该 Provider 的 base_url 已锁定" />
+        <p v-if="!baseUrlEditable" data-test="base-url-locked" class="hint">
+          该 Provider 已绑定固定端点（无需手填）
+        </p>
       </div>
 
       <div class="field">
@@ -85,7 +96,7 @@
 </template>
 
 <script setup>
-import { reactive, ref, computed, onMounted, onUnmounted } from 'vue'
+import { reactive, ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { getLlmConfig, saveLlmConfig, testLlmConfig, listLlmModels } from '@/api'
 
@@ -100,9 +111,32 @@ const maskedKey = ref('')
 const form = reactive({ provider: 'deepseek', api_key: '', base_url: '', model: '' })
 const showKey = ref(false)
 
-// base_url 锁定下拉状态
-const baseUrlOptions = ref([])
+// base_url 锁定/可编辑状态
 const baseUrlEditable = ref(false)
+// 区域筛选（国内/国际）；兼容自定义端点 region="" 永远常驻底部
+const region = ref('国内')
+const namedProvidersInRegion = computed(() => {
+  const out = {}
+  for (const [key, p] of Object.entries(providers.value)) {
+    if ((p.region ?? '') === region.value) out[key] = p
+  }
+  return out
+})
+const compatProviders = computed(() => {
+  const out = {}
+  for (const [key, p] of Object.entries(providers.value)) {
+    if ((p.region ?? '') === '') out[key] = p
+  }
+  return out
+})
+// 切换区域：若当前是命名厂商且不在新区域，重置到新区域第一个厂商
+watch(region, (nv) => {
+  const cur = providers.value[form.provider]
+  if (cur && (cur.region ?? '') !== '' && (cur.region ?? '') !== nv) {
+    const firstNamed = Object.keys(namedProvidersInRegion.value)[0]
+    if (firstNamed) { form.provider = firstNamed; onProviderChange() }
+  }
+})
 // 模型自动拉取状态
 const modelOptions = ref([])
 const fetchingModels = ref(false)
@@ -127,21 +161,21 @@ function goBack() {
   else router.push('/')
 }
 
-function applyProviderBaseUrls() {
+function applyProviderDefaults() {
   const p = providers.value[form.provider] || {}
-  baseUrlOptions.value = p.base_urls || []
-  // 缺 base_url_editable 字段时:无锁定列表即视为可自由输入
-  baseUrlEditable.value = p.base_url_editable ?? baseUrlOptions.value.length === 0
+  // 缺 base_url_editable 字段时：无 default_base_url 即视为可自由输入
+  baseUrlEditable.value = p.base_url_editable ?? !p.default_base_url
   if (baseUrlEditable.value) {
     if (!form.base_url) form.base_url = p.default_base_url || ''
-  } else if (!baseUrlOptions.value.includes(form.base_url)) {
-    form.base_url = baseUrlOptions.value[0] || ''
+  } else {
+    // 锁定型：base_url 固定为该 Provider 的预设端点（与后端强制一致）
+    form.base_url = p.default_base_url || ''
   }
 }
 
 function onProviderChange() {
   const p = providers.value[form.provider] || {}
-  applyProviderBaseUrls()
+  applyProviderDefaults()
   if (!form.model) form.model = p.default_model || ''
   modelOptions.value = []
   fetchModelsError.value = ''
@@ -160,12 +194,15 @@ async function load() {
     const cfg = await getLlmConfig()
     providers.value = cfg.providers || {}
     form.provider = cfg.provider || 'deepseek'
+    // 据已存 provider 的 region 反推区域；兼容项(region '')默认国内
+    const savedP = providers.value[form.provider]
+    region.value = (savedP && savedP.region) || '国内'
     form.base_url = cfg.base_url || ''
     form.model = cfg.model || ''
     hasKey.value = !!cfg.has_api_key
     maskedKey.value = cfg.api_key_masked || ''
     form.api_key = ''  // 永不预填真实 key;留空 = 不改
-    applyProviderBaseUrls()
+    applyProviderDefaults()
     loaded.value = true
     if (canFetchModels.value) fetchModels()  // 进入页若三项齐全,自动拉一次
   } catch (e) {
@@ -312,6 +349,30 @@ onMounted(load)
   outline: none;
   border-color: #4f8ef7;
   box-shadow: 0 0 0 3px rgba(79, 142, 247, 0.1);
+}
+.region-switch {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 2px;
+}
+.region-switch label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #374151;
+  cursor: pointer;
+}
+.region-switch input[type="radio"] {
+  width: auto;
+  margin: 0;
+  accent-color: #4f8ef7;
+}
+.field input.readonly-url {
+  background: #f3f4f6;
+  color: #6b7280;
+  cursor: default;
 }
 .toggle-btn {
   position: absolute;

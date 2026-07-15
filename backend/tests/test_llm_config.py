@@ -2,7 +2,8 @@
 import pytest
 
 from app.llm.config import (
-    PROVIDERS, get_config, infer_provider_type, LLMConfig, _resolve_config, provider_base_urls,
+    PROVIDERS, get_config, infer_provider_type, LLMConfig, _resolve_config,
+    provider_base_url_editable, resolve_effective_base_url,
 )
 
 
@@ -20,7 +21,7 @@ def clean_llm_env(monkeypatch):
 
 
 def test_providers_registry_has_required_entries():
-    for name in ("deepseek", "openai", "anthropic", "glm", "qwen", "doubao", "moonshot"):
+    for name in ("deepseek", "openai", "anthropic", "glm", "glm-coding", "qwen", "doubao", "moonshot"):
         assert name in PROVIDERS, f"缺少 provider: {name}"
         entry = PROVIDERS[name]
         assert "provider_type" in entry
@@ -136,34 +137,64 @@ def test_resolve_config_no_require_key_does_not_raise(clean_llm_env):
     assert cfg.api_key == ""
 
 
-# ==================== base_urls 锁定列表测试 ====================
+# ==================== base_url 锁定（1 provider = 1 url）测试 ====================
 
-def test_providers_have_base_urls_list():
+def test_providers_have_default_base_url():
     for name, p in PROVIDERS.items():
-        assert "base_urls" in p, f"{name} 缺 base_urls"
-        assert isinstance(p["base_urls"], list)
+        assert "default_base_url" in p, f"{name} 缺 default_base_url"
 
 
-def test_default_base_url_is_first_in_base_urls():
+def test_glm_standard_and_coding_are_separate_providers():
+    # 标准 GLM 与编码套件拆成两个独立 provider，各自一个固定 url
+    assert PROVIDERS["glm"]["default_base_url"] == "https://open.bigmodel.cn/api/paas/v4"
+    assert "glm-coding" in PROVIDERS
+    assert PROVIDERS["glm-coding"]["default_base_url"] == "https://open.bigmodel.cn/api/coding/paas/v4"
+    assert PROVIDERS["glm-coding"]["title"] == "智谱 GLM Coding Plan"
+
+
+def test_moonshot_has_single_url():
+    assert PROVIDERS["moonshot"]["default_base_url"] == "https://api.moonshot.cn/v1"
+
+
+def test_provider_base_url_editable_helper():
+    # 命名厂商锁定
+    assert provider_base_url_editable("deepseek") is False
+    assert provider_base_url_editable("glm") is False
+    assert provider_base_url_editable("glm-coding") is False
+    # 兼容自定义端点可编辑
+    assert provider_base_url_editable("openai-compatible") is True
+    assert provider_base_url_editable("anthropic-compatible") is True
+    # 未知 provider 视为可编辑
+    assert provider_base_url_editable("totally-unknown") is True
+
+
+def test_resolve_effective_base_url_locked_forces_default():
+    # 锁定型：无论表单/已保存传什么，一律用预设默认（防篡改）
+    assert resolve_effective_base_url("deepseek", "http://127.0.0.1/x", "") == "https://api.deepseek.com"
+    assert resolve_effective_base_url("glm-coding", None, "whatever") == "https://open.bigmodel.cn/api/coding/paas/v4"
+
+
+def test_resolve_effective_base_url_editable_uses_form_or_saved():
+    assert resolve_effective_base_url("openai-compatible", "https://my.proxy/v1", "https://old/v1") == "https://my.proxy/v1"
+    assert resolve_effective_base_url("openai-compatible", None, "https://saved/v1") == "https://saved/v1"
+    assert resolve_effective_base_url("openai-compatible", "", "") == ""
+
+
+# ==================== region（国内/国际）测试 ====================
+
+def test_providers_have_region_field():
     for name, p in PROVIDERS.items():
-        if p["base_urls"]:
-            assert p["default_base_url"] == p["base_urls"][0], name
+        assert "region" in p, f"{name} 缺 region"
+        assert p["region"] in ("国内", "国际", ""), f"{name} region 取值非法: {p['region']!r}"
 
 
-def test_glm_has_coding_endpoint():
-    assert "https://open.bigmodel.cn/api/coding/paas/v4" in PROVIDERS["glm"]["base_urls"]
-
-
-def test_moonshot_has_global_endpoint():
-    assert "https://api.moonshot.ai/v1" in PROVIDERS["moonshot"]["base_urls"]
-
-
-def test_compatible_providers_have_empty_base_urls():
-    assert PROVIDERS["openai-compatible"]["base_urls"] == []
-    assert PROVIDERS["anthropic-compatible"]["base_urls"] == []
-
-
-def test_provider_base_urls_helper():
-    assert provider_base_urls("glm") == PROVIDERS["glm"]["base_urls"]
-    assert provider_base_urls("openai-compatible") == []
-    assert provider_base_urls("totally-unknown") == []
+def test_region_classification():
+    domestic = {"deepseek", "glm", "glm-coding", "qwen", "doubao", "moonshot"}
+    overseas = {"openai", "anthropic"}
+    compat = {"openai-compatible", "anthropic-compatible"}
+    for name in domestic:
+        assert PROVIDERS[name]["region"] == "国内", f"{name} 应为国内"
+    for name in overseas:
+        assert PROVIDERS[name]["region"] == "国际", f"{name} 应为国际"
+    for name in compat:
+        assert PROVIDERS[name]["region"] == "", f"{name} 应为地区无关(空)"
