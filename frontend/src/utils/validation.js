@@ -27,6 +27,9 @@ const SUPPORTED_HOSTS = [
   'xiaoyuzhou.com',
   'www.xiaoyuzhou.com',
   'podcast.xiaoyuzhou.com',
+  // 小宇宙真实域名 xiaoyuzhoufm.com（episode id 为 24 位十六进制 ObjectId）
+  'xiaoyuzhoufm.com',
+  'www.xiaoyuzhoufm.com',
 ]
 
 /**

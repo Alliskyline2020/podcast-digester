@@ -48,6 +48,10 @@ describe('validatePodcastInput', () => {
       'https://v.douyin.com/abc123/',
       'https://xiaoyuzhou.com/podcast/123',
       'https://podcast.xiaoyuzhou.com/episode/abc',
+      // 小宇宙真实域名 xiaoyuzhoufm.com + 24 位十六进制 episode id
+      // 回归：旧 SUPPORTED_HOSTS 只认 xiaoyuzhou.com，真实链接被拒
+      'https://www.xiaoyuzhoufm.com/episode/6a5b98a66356eb2d9be4ad2c',
+      'https://xiaoyuzhoufm.com/episode/5f8d2a1b3c4e5f6a7b8c9d0e',
     ])('accepts %s', (url) => {
       const r = validatePodcastInput(url)
       expect(r.ok).toBe(true)

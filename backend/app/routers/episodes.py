@@ -196,7 +196,7 @@ def _source_label_from(raw_input: str, source_type_db: Optional[str] = None) -> 
             return "YouTube"
         if "bilibili.com" in raw:
             return "B站"
-        if "xiaoyuzhou.com" in raw:
+        if "xiaoyuzhou.com" in raw or "xiaoyuzhoufm.com" in raw:
             return "小宇宙"
         if "douyin.com" in raw:
             return "抖音"

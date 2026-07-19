@@ -19,9 +19,11 @@ class XiaoyuzhouParser(BaseSourceParser):
     DESCRIPTION = "CDP 绕过反爬；支持 yt-dlp 备用"
 
     # 小宇宙 URL 匹配模式
+    # episode id 为 24 位十六进制 ObjectId（可能字母开头），旧 \d+ 会漏匹配；
+    # 用 [a-zA-Z0-9]+ 兼容十六进制 id 与历史纯数字 id。
     PATTERNS = [
-        r"xiaoyuzhou\.com/episode/\d+",
-        r"xiaoyuzhoufm\.com/episode/\d+",
+        r"xiaoyuzhou\.com/episode/[a-zA-Z0-9]+",
+        r"xiaoyuzhoufm\.com/episode/[a-zA-Z0-9]+",
     ]
 
     async def matches(self, raw_input: str) -> bool:
