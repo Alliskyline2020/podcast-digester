@@ -127,6 +127,9 @@ backend/tools/quick_verify.py
 *.tmp
 *.bak
 
+# 内部过程文档：superpowers 的设计稿/实现计划（开发过程产物，保留本地参考但不入库）
+docs/superpowers/
+
 # Sensitive credentials (session cookies, API tokens, etc.)
 # 历史问题：cookies.txt 早期被误 commit，含 YouTube session cookies
 backend/cookies.txt
