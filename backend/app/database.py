@@ -38,7 +38,7 @@ def transactional(func: Callable) -> Callable:
     """
     @wraps(func)
     async def wrapper(*args, **kwargs):
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with _connect() as db:
             try:
                 # 开始事务
                 await db.execute("BEGIN")
@@ -59,7 +59,7 @@ def transactional(func: Callable) -> Callable:
 
 async def init_db():
     """初始化数据库表"""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         await db.executescript("""
         -- 启用 WAL 模式以提升并发性能（跨进程读写安全）
         PRAGMA journal_mode=WAL;
@@ -181,6 +181,19 @@ async def _ensure_episode_columns(db) -> None:
     await db.commit()
 
 
+def _connect() -> aiosqlite.Connection:
+    """异步连接工厂：统一设 busy_timeout=30s（timeout=30.0 → sqlite3 busy_timeout）。
+
+    所有 async 仓储方法经此开连接。若直接 `_connect()`，底层
+    sqlite3 默认 timeout=5s（busy_timeout 5s）；pipeline 的 fire-and-forget 进度
+    回调 `asyncio.create_task(IngestJobRepository.update_stages(...))` 会在收尾
+    阶段并发写库，多个写者争抢 WAL 的单写锁，5s 内拿不到即抛
+    `OperationalError('database is locked')`（进度条更新偶发失败，不影响最终数据）。
+    30s 让并发写排队串行化而非立即失败。与同步路径 `_sync_db` 同源修复。
+    """
+    return aiosqlite.connect(DB_PATH, timeout=30.0)
+
+
 async def get_db() -> aiosqlite.Connection:
     """获取数据库连接（依赖注入用）
 
@@ -188,10 +201,10 @@ async def get_db() -> aiosqlite.Connection:
     推荐使用 async with 语句确保连接正确关闭。
 
     示例：
-        async with get_db() as db:
+        async with (await get_db()) as db:
             await db.execute(...)
     """
-    return aiosqlite.connect(DB_PATH)
+    return _connect()
 
 
 # ==================== 数据访问层 ====================
@@ -209,7 +222,7 @@ class EpisodeRepository:
     async def create(episode: dict) -> None:
         """创建节目记录（带错误处理）"""
         try:
-            async with aiosqlite.connect(DB_PATH) as db:
+            async with _connect() as db:
                 await db.execute("""
                     INSERT INTO episode (
                         id, title, status, language, media_path, is_fixture, error_msg,
@@ -236,7 +249,7 @@ class EpisodeRepository:
     async def get_by_id(episode_id: str) -> Optional[dict]:
         """获取节目记录（带错误处理）"""
         try:
-            async with aiosqlite.connect(DB_PATH) as db:
+            async with _connect() as db:
                 db.row_factory = aiosqlite.Row
                 async with db.execute(
                     "SELECT * FROM episode WHERE id = ?", (episode_id,)
@@ -259,7 +272,7 @@ class EpisodeRepository:
 
     @staticmethod
     async def list_all() -> List[dict]:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with _connect() as db:
             db.row_factory = aiosqlite.Row
             async with db.execute("""
                 SELECT * FROM episode
@@ -298,7 +311,7 @@ class EpisodeRepository:
             return []
 
         placeholders = ",".join("?" * len(validated))
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with _connect() as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(f"""
                 SELECT * FROM episode
@@ -317,7 +330,7 @@ class EpisodeRepository:
 
     @staticmethod
     async def update_status(episode_id: str, status: str, error_msg: Optional[str] = None) -> None:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with _connect() as db:
             now = datetime.now().isoformat()
             if error_msg:
                 await db.execute("""
@@ -372,7 +385,7 @@ class EpisodeRepository:
 
         set_clause = ", ".join(f"{k} = ?" for k in fields.keys())
         try:
-            async with aiosqlite.connect(DB_PATH) as db:
+            async with _connect() as db:
                 cursor = await db.execute(
                     f"UPDATE episode SET {set_clause} WHERE id = ?",
                     values + [episode_id]
@@ -415,7 +428,7 @@ class EpisodeRepository:
         # 序列化为JSON
         transcript_json = json.dumps(transcript.model_dump(), ensure_ascii=False)
 
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with _connect() as db:
             cursor = await db.execute(
                 "UPDATE episode SET transcript = ?, updated_at = ? WHERE id = ?",
                 (transcript_json, datetime.now().isoformat(), episode_id)
@@ -447,7 +460,7 @@ class EpisodeRepository:
 
     @staticmethod
     async def delete(episode_id: str) -> bool:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with _connect() as db:
             cursor = await db.execute(
                 "DELETE FROM episode WHERE id = ?", (episode_id,)
             )
@@ -456,7 +469,7 @@ class EpisodeRepository:
 
     @staticmethod
     async def update_last_activity(episode_id: str) -> None:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with _connect() as db:
             await db.execute("""
                 UPDATE episode SET last_activity_ts = ? WHERE id = ?
             """, (datetime.now().isoformat(), episode_id))
@@ -473,7 +486,7 @@ class IngestJobRepository:
         Returns:
             True 表示新建成功；False 表示该 episode 已有任务记录（未覆盖既有进度）。
         """
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with _connect() as db:
             now = datetime.now().isoformat()
             cursor = await db.execute("""
                 INSERT INTO ingest_job (episode_id, current_stage, stages_json, created_at, updated_at)
@@ -485,7 +498,7 @@ class IngestJobRepository:
 
     @staticmethod
     async def get_by_id(episode_id: str) -> Optional[dict]:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with _connect() as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
                 "SELECT * FROM ingest_job WHERE episode_id = ?", (episode_id,)
@@ -499,7 +512,7 @@ class IngestJobRepository:
 
     @staticmethod
     async def update_stages(episode_id: str, stages: list, current_stage: str) -> None:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with _connect() as db:
             await db.execute("""
                 UPDATE ingest_job SET stages_json = ?, current_stage = ?, updated_at = ?
                 WHERE episode_id = ?
@@ -512,7 +525,7 @@ class CostLogRepository:
 
     @staticmethod
     async def log(cost_data: dict) -> None:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with _connect() as db:
             await db.execute("""
                 INSERT INTO cost_log (
                     ts, task, model, prompt_tokens, completion_tokens, total_tokens,
@@ -535,7 +548,7 @@ class CostLogRepository:
 
     @staticmethod
     async def get_total_cost(episode_id: Optional[str] = None) -> float:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with _connect() as db:
             if episode_id:
                 async with db.execute(
                     "SELECT SUM(cost_usd) FROM cost_log WHERE episode_id = ?",
@@ -555,7 +568,7 @@ class UsageLogRepository:
     @staticmethod
     async def log(log_data: dict) -> None:
         """记录日志"""
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with _connect() as db:
             await db.execute("""
                 INSERT INTO usage_log (ts, event_type, episode_id, payload_json)
                 VALUES (?, ?, ?, ?)
@@ -570,7 +583,7 @@ class UsageLogRepository:
     @staticmethod
     async def get_by_episode(episode_id: str, limit: int = 10) -> list[dict]:
         """获取某个 episode 的日志记录"""
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with _connect() as db:
             db.row_factory = aiosqlite.Row
             async with db.execute("""
                 SELECT * FROM usage_log
@@ -588,7 +601,7 @@ class ViewStateRepository:
     @staticmethod
     async def get(episode_id: str) -> Optional[dict]:
         """获取 episode 的视图状态"""
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with _connect() as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
                 "SELECT * FROM episode_view_state WHERE episode_id = ?",
@@ -616,7 +629,7 @@ class ViewStateRepository:
             # 更新现有记录
             set_clauses = ", ".join(f"{k} = ?" for k in fields.keys())
             values = list(fields.values()) + [datetime.now().isoformat()]
-            async with aiosqlite.connect(DB_PATH) as db:
+            async with _connect() as db:
                 await db.execute(
                     f"UPDATE episode_view_state SET {set_clauses}, updated_at = ? WHERE episode_id = ?",
                     (*values, episode_id)
@@ -624,7 +637,7 @@ class ViewStateRepository:
                 await db.commit()
         else:
             # 创建新记录
-            async with aiosqlite.connect(DB_PATH) as db:
+            async with _connect() as db:
                 await db.execute("""
                     INSERT INTO episode_view_state (episode_id, highlight_collapsed, last_played_position_ms, updated_at)
                     VALUES (?, ?, ?, ?)
@@ -638,7 +651,7 @@ class SourceRepository:
     @staticmethod
     async def create(episode_id: str, source_type: str, raw_input: str, resolved_url: str = None, requires_auth: bool = False) -> None:
         """创建源记录"""
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with _connect() as db:
             await db.execute("""
                 INSERT INTO source (episode_id, source_type, raw_input, resolved_url, requires_auth, created_at)
                 VALUES (?, ?, ?, ?, ?, ?)
@@ -648,7 +661,7 @@ class SourceRepository:
     @staticmethod
     async def get_by_episode(episode_id: str) -> Optional[dict]:
         """获取 episode 的源记录"""
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with _connect() as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
                 "SELECT * FROM source WHERE episode_id = ?",
@@ -661,9 +674,8 @@ class SourceRepository:
 # ==================== 同步方法（用于非异步上下文）====================
 
 def _sync_connect():
-    """获取同步数据库连接"""
-    import aiosqlite
-    return aiosqlite.connect(DB_PATH)
+    """获取同步数据库连接（统一经 _connect，带 30s busy_timeout）。"""
+    return _connect()
 
 
 def _sync_db():
