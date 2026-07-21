@@ -20,7 +20,7 @@ faster-whisper==1.0.3
 requests>=2.31,<3
 
 # yt-dlp for media download
-yt-dlp==2025.1.26
+yt-dlp==2026.7.4
 
 # Playwright for CDP bypass (optional, for anti-scraping)
 playwright==1.49.0

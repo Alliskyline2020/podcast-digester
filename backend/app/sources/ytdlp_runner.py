@@ -181,6 +181,11 @@ async def run_ytdlp(
         "--no-warnings",
         "-o", output_template,
         "--newline",
+        # 代理/弱网下下载可能在末尾截断(丢 moov atom → 无音轨/Duration N/A),
+        # 导致后续 ASR 报 avfaudio 解码错误。加重试 + socket 超时让 yt-dlp 自愈。
+        "--retries", "10",
+        "--fragment-retries", "10",
+        "--socket-timeout", "30",
         "-f", opts["format"],
         safe_url,
     ]
