@@ -78,7 +78,9 @@ async def init_db():
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             last_activity_ts TEXT,
-            paragraph_mappings TEXT
+            paragraph_mappings TEXT,
+            title_zh TEXT,
+            transcript TEXT
         );
 
         -- 来源表
@@ -156,6 +158,27 @@ async def init_db():
         """)
 
         await db.commit()
+
+        # schema 演进：幂等补齐 episode 表历史缺失列（见 _ensure_episode_columns）
+        await _ensure_episode_columns(db)
+
+
+async def _ensure_episode_columns(db) -> None:
+    """幂等补齐 episode 表缺失列（title_zh / transcript）。
+
+    这两列在代码里被 pipeline 的 EpisodeRepository.update（title_zh）与
+    update_transcript（transcript）写入，但早期 init_db 的 CREATE TABLE 未
+    包含、也无迁移补列，导致历史库/fresh 库跑到写库即报
+    'no such column: title_zh' / 'transcript'。新库已由 CREATE TABLE 直接含；
+    此处为已有（缺列）库幂等补齐。
+    """
+    cur = await db.execute("PRAGMA table_info(episode)")
+    existing = {row[1] for row in await cur.fetchall()}
+    for col, decl in (("title_zh", "TEXT"), ("transcript", "TEXT")):
+        if col not in existing:
+            await db.execute(f"ALTER TABLE episode ADD COLUMN {col} {decl}")
+            logger.info(f"[migrate] episode: ADD COLUMN {col} {decl}")
+    await db.commit()
 
 
 async def get_db() -> aiosqlite.Connection:
