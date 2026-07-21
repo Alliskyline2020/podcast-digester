@@ -182,6 +182,17 @@ async def init_db():
             FOREIGN KEY (episode_id) REFERENCES episode(id) ON DELETE CASCADE
         );
 
+        -- 词库表（glossary）：前端「词库」CRUD + apply-glossary 依赖。
+        -- migrate_glossary_to_db.py 建表但从未接启动路径；新用户一点词库功能即
+        -- 'no such table: glossary'。并入 init_db（IF NOT EXISTS 幂等，schema 与
+        -- 迁移脚本逐字一致，列对齐 GlossaryRepository 的 SELECT/INSERT）。
+        CREATE TABLE IF NOT EXISTS glossary (
+            correct TEXT PRIMARY KEY,
+            wrong_list TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
         -- 索引
         CREATE INDEX IF NOT EXISTS idx_episode_status ON episode(status);
         CREATE INDEX IF NOT EXISTS idx_episode_last_activity ON episode(last_activity_ts DESC);
@@ -192,6 +203,7 @@ async def init_db():
         CREATE INDEX IF NOT EXISTS idx_summaries_updated ON summaries(updated_at DESC);
         CREATE INDEX IF NOT EXISTS idx_highlight_updated ON highlight(updated_at DESC);
         CREATE INDEX IF NOT EXISTS idx_product_insights_updated ON product_insights(updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_glossary_updated ON glossary(updated_at DESC);
         """)
 
         await db.commit()
