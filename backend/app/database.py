@@ -149,12 +149,49 @@ async def init_db():
             updated_at TEXT NOT NULL
         );
 
+        -- 派生数据表（outline/summaries/highlight/product_insights）
+        -- 早期只存在于 migrations/add_derived_data_tables.py，而该迁移从未接到
+        -- 启动路径；fresh 安装跑到 DerivedDataRepository.set 持久化洞察即
+        -- 'no such table: outline'。统一并入 init_db 建表（IF NOT EXISTS 幂等，
+        -- 与 _create_tables() 的 schema 逐字一致，列名对齐仓储层写入列）。
+        CREATE TABLE IF NOT EXISTS outline (
+            episode_id TEXT PRIMARY KEY,
+            entries_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (episode_id) REFERENCES episode(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS summaries (
+            episode_id TEXT PRIMARY KEY,
+            summaries_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (episode_id) REFERENCES episode(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS highlight (
+            episode_id TEXT PRIMARY KEY,
+            highlights_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (episode_id) REFERENCES episode(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS product_insights (
+            episode_id TEXT PRIMARY KEY,
+            insights_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (episode_id) REFERENCES episode(id) ON DELETE CASCADE
+        );
+
         -- 索引
         CREATE INDEX IF NOT EXISTS idx_episode_status ON episode(status);
         CREATE INDEX IF NOT EXISTS idx_episode_last_activity ON episode(last_activity_ts DESC);
         CREATE INDEX IF NOT EXISTS idx_usage_log_episode ON usage_log(episode_id);
         CREATE INDEX IF NOT EXISTS idx_cost_log_episode ON cost_log(episode_id);
         CREATE INDEX IF NOT EXISTS idx_cost_log_ts ON cost_log(ts DESC);
+        CREATE INDEX IF NOT EXISTS idx_outline_updated ON outline(updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_summaries_updated ON summaries(updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_highlight_updated ON highlight(updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_product_insights_updated ON product_insights(updated_at DESC);
         """)
 
         await db.commit()
