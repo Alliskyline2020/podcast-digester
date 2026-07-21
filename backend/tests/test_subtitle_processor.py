@@ -162,6 +162,28 @@ async def test_polish_skips_already_punctuated_manual_cc(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_polish_force_bypasses_manual_cc_skip(monkeypatch):
+    """ASR 源(force=True): 即便标点完整(_already_punctuated 判定为 manual CC),
+    也要进入 LLM polish —— Apple AFM 3 自带标点, 但仍需矫正人名/术语/口水词/叠词。
+
+    对照 test_polish_skips_already_punctuated_manual_cc: 同样 manual-CC 标点密度,
+    force=False → 跳过(calls==[], n==0); force=True → 进 LLM(calls>=1, n>=1)。
+    """
+    t = Transcript(episode_id="ep_test", language="en", segments=_en_cc_segs(10))
+    calls = []
+    # 回显原文(过 semantic_ok, preserve=1.0), 证明走的是 LLM 接受路径而非短路
+    async def fake_chat_json(system, user, **kw):
+        calls.append(1)
+        return {"polished": [{"id": s.id, "text": s.text_original} for s in t.segments]}
+    monkeypatch.setattr("app.services.subtitle_processor.chat_json", fake_chat_json)
+
+    n = await SubtitleProcessor().polish(t, force=True)
+
+    assert len(calls) >= 1  # 关键: LLM 被调用, "已有标点"跳过判定被 force 绕过
+    assert n >= 1           # 有句被接受(对照短路路径返回 n==0)
+
+
+@pytest.mark.asyncio
 async def test_polish_still_runs_for_unpunctuated_asr(monkeypatch):
     """无标点 ASR → polish 正常调 LLM, 不被误跳。"""
     calls = []
@@ -189,3 +211,71 @@ async def test_polish_skip_threshold_not_triggered_by_sparse_punct(monkeypatch):
     t = _transcript("zh", [_seg(0, "你好,世界很长很长很长很长很长很长很长很长")])
     await SubtitleProcessor().polish(t)
     assert len(calls) >= 1
+
+
+# ---------- Task 4: 政策反转(叠词/人名术语矫正) + entity_variants 接线 ----------
+
+@pytest.mark.asyncio
+async def test_polish_folds_repetition(monkeypatch):
+    async def fake_chat_json(**kwargs):
+        return {"polished": [{"id": 0, "text": "我觉得这个很好。"}]}
+    monkeypatch.setattr("app.services.subtitle_processor.chat_json", fake_chat_json)
+    t = _transcript("zh", [_seg(0, "我我我觉得 这个很好")])
+    n = await SubtitleProcessor().polish(t, entity_variants={})
+    assert t.segments[0].text_with_punct == "我觉得这个很好。"
+    assert n == 1
+
+
+@pytest.mark.asyncio
+async def test_polish_corrects_name_with_entity_variants(monkeypatch):
+    captured = {}
+
+    async def fake_chat_json(**kwargs):
+        captured["user"] = kwargs.get("user", "")
+        return {"polished": [{"id": 0, "text": "姚顺宇讲了 Transformer。"}]}
+    monkeypatch.setattr("app.services.subtitle_processor.chat_json", fake_chat_json)
+
+    t = _transcript("zh", [_seg(0, "姚顺雨讲了 传思我们")])
+    variants = {"姚顺雨": "姚顺宇", "传思我们": "Transformer",
+                "姚顺宇": "姚顺宇", "Transformer": "Transformer"}
+    await SubtitleProcessor().polish(t, entity_variants=variants)
+
+    # 实体表注入到 user prompt
+    assert "姚顺雨" in captured["user"] and "姚顺宇" in captured["user"]
+    # 矫正被 semantic_ok 接受(实体表放行)
+    assert t.segments[0].text_with_punct == "姚顺宇讲了 Transformer。"
+
+
+@pytest.mark.asyncio
+async def test_polish_rejects_unsanctioned_correction(monkeypatch):
+    # LLM 矫正了一个不在实体表里的名字 → 新增率超阈 → 回退
+    async def fake_chat_json(**kwargs):
+        return {"polished": [{"id": 0, "text": "张三丰说了"}]}  # 把"张三"改成"张三丰"
+    monkeypatch.setattr("app.services.subtitle_processor.chat_json", fake_chat_json)
+    t = _transcript("zh", [_seg(0, "张三说了")])
+    await SubtitleProcessor().polish(t, entity_variants={})
+    assert t.segments[0].text_with_punct == "张三说了"  # 回退(零语义改动)
+
+
+@pytest.mark.asyncio
+async def test_polish_system_prompt_has_new_rules():
+    from app.services.subtitle_processor import POLISH_SYSTEM
+    # 叠词/口吃
+    assert "叠词" in POLISH_SYSTEM or "口吃" in POLISH_SYSTEM
+    # 人名/术语矫正(不再是"原样保留")
+    assert "矫正" in POLISH_SYSTEM or "纠正" in POLISH_SYSTEM
+
+
+@pytest.mark.asyncio
+async def test_polish_precleans_before_llm(monkeypatch):
+    captured = {}
+
+    async def fake_chat_json(**kwargs):
+        captured["user"] = kwargs.get("user", "")
+        return {"polished": []}
+    monkeypatch.setattr("app.services.subtitle_processor.chat_json", fake_chat_json)
+    t = _transcript("zh", [_seg(0, "[音乐]嗯你好&lt;b&gt;世界")])
+    await SubtitleProcessor().polish(t, entity_variants={})
+    # 机械垃圾在喂给 LLM 前已清: 无 [音乐] / 无 HTML 实体
+    assert "[音乐]" not in captured["user"]
+    assert "&lt;" not in captured["user"]

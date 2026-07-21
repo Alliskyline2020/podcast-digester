@@ -2,10 +2,13 @@
 字幕分段服务
 
 将零散的 subtitle segments 合并成段落，支持可配置的分段规则
-优化：语义完整性、文本清洗、句子级别映射
+优化：语义完整性、句子级别映射。
+
+【解耦】清洗已上移到 LLM polish(写入 Segment.text_with_punct); 分段器是纯分组器——
+不产文本、不做规则清洗, 段落 text_clean = 各 segment.text_with_punct 的投影。
 """
 from typing import List, Dict, Any
-from app.utils import clean_text
+from app.utils import clean_text  # 保留: deprecated clean_text 方法的兼容壳
 
 
 class SubtitleSegmenter:
@@ -36,16 +39,7 @@ class SubtitleSegmenter:
         self.extract_sentences = extract_sentences
 
     def clean_text(self, text: str, aggressive: bool = True) -> str:
-        """
-        清理文本：移除 HTML 标签、语气词、多余空白
-
-        Args:
-            text: 原始文本
-            aggressive: 是否激进清洗（包括语气词）
-
-        Returns:
-            清理后的文本
-        """
+        """[deprecated] 分段器已解耦, 不再内部清洗。保留仅为兼容外部调用。"""
         return clean_text(text, aggressive=aggressive)
 
     def extract_sentences_from_text(self, text: str, segments: List[Dict]) -> List[Dict]:
@@ -160,9 +154,6 @@ class SubtitleSegmenter:
             if not seg_text:
                 continue
 
-            # 清洗文本（用于计算长度）
-            seg_text_clean = self.clean_text(seg_text) if self.enable_cleaning else seg_text
-
             # 检查时间间隔
             time_gap = 0
             if current_para["segments"]:
@@ -214,7 +205,10 @@ class SubtitleSegmenter:
 
     def _finalize_paragraph(self, para: Dict, para_id: int) -> Dict[str, Any]:
         """
-        将段落数据转换为最终格式（优化版）
+        将段落数据转换为最终格式（纯投影, 不清洗）。
+
+        text_clean = 各 segment.text_with_punct 的投影(由 segmenter_input 保证存在,
+        缺失回退 text_original)。清洗已由 LLM polish 完成, 分段器不再做规则清洗。
 
         Args:
             para: 段落原始数据
@@ -225,12 +219,9 @@ class SubtitleSegmenter:
         """
         segments = para["segments"]
 
-        # 清洗文本
-        text_clean = None
-        if self.enable_cleaning:
-            text_clean = self.clean_text(para["text_original"])
-        else:
-            text_clean = para["text_original"]
+        # 投影: 用每个 segment 的 text_with_punct(清洗后展示文本)
+        parts = [seg.get("text_with_punct") or seg.get("text_original", "") for seg in segments]
+        text_clean = " ".join(p for p in parts if p).strip() or para["text_original"]
 
         # 提取句子级别映射
         sentences = []

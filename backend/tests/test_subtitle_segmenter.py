@@ -143,25 +143,78 @@ def test_segment_max_chars_limit():
     assert paragraphs[1]["segment_ids"] == ["seg3"]
 
 
-def test_segment_html_cleaning():
-    """测试 HTML 标签和实体清理"""
+def test_segment_projects_text_with_punct_not_rule_clean():
+    """分段器已解耦: text_clean 投影 text_with_punct, 不再做规则清洗。
+
+    清洗责任上移到 LLM polish(写 Segment.text_with_punct); 分段器只投影。
+    若 text_with_punct 含 HTML(说明上游没清干净), 分段器原样投影, 不再二次清洗。
+    """
     from app.services.subtitle_segmenter import SubtitleSegmenter
 
     segments = [
-        {"id": "seg1", "start_ms": 0, "end_ms": 5000, "text_original": "Hello &lt;world&gt;", "_index": 0},
-        {"id": "seg2", "start_ms": 5000, "end_ms": 10000, "text_original": "This is <b>bold</b> text", "_index": 1},
+        {"id": "seg1", "start_ms": 0, "end_ms": 5000, "_index": 0,
+         "text_original": "raw &lt;html&gt;", "text_with_punct": "Clean text one."},
+        {"id": "seg2", "start_ms": 5000, "end_ms": 10000, "_index": 1,
+         "text_original": "raw <b>bold</b>", "text_with_punct": "Clean text two."},
     ]
 
     segmenter = SubtitleSegmenter()
     paragraphs = segmenter.segment(segments)
 
     assert len(paragraphs) == 1
-    # text_original 保留原始文本，segments之间有空格
-    assert paragraphs[0]["text_original"] == "Hello &lt;world&gt; This is <b>bold</b> text"
-    # text_clean 包含清洗后的文本
-    assert paragraphs[0]["text_clean"] == "Hello <world> This is bold text"
-    assert "<b>" not in paragraphs[0]["text_clean"]
-    assert "&lt;" not in paragraphs[0]["text_clean"]
+    # text_clean 投影 text_with_punct, 不含 raw html
+    assert paragraphs[0]["text_clean"] == "Clean text one. Clean text two."
+
+
+def test_segmenter_does_not_invoke_rule_clean(monkeypatch):
+    """分段器不应再调用规则 clean_text(否则计数 > 0)。"""
+    from app.services import subtitle_segmenter as mod
+    from app.services.subtitle_segmenter import SubtitleSegmenter
+
+    calls = {"n": 0}
+    orig = mod.clean_text
+
+    def spy(text, aggressive=True):
+        calls["n"] += 1
+        return orig(text, aggressive=aggressive)
+
+    monkeypatch.setattr(mod, "clean_text", spy)
+
+    segs = [
+        {"id": "seg_e_0", "start_ms": 0, "end_ms": 1000, "_index": 0,
+         "text_original": "raw asr zero", "text_with_punct": "Raw ASR zero."},
+        {"id": "seg_e_1", "start_ms": 1000, "end_ms": 2000, "_index": 1,
+         "text_original": "raw asr one", "text_with_punct": "Raw ASR one."},
+    ]
+    SubtitleSegmenter().segment(segs)
+    assert calls["n"] == 0
+
+
+def test_segmenter_falls_back_to_text_original_when_no_punct():
+    """text_with_punct 缺失时回退 text_original(零清洗, 但不丢段)。"""
+    from app.services.subtitle_segmenter import SubtitleSegmenter
+
+    segs = [{"id": "s0", "start_ms": 0, "end_ms": 500, "_index": 0,
+             "text_original": "只有原文", "text_with_punct": None}]
+    paras = SubtitleSegmenter().segment(segs)
+    assert paras[0]["text_clean"] == "只有原文"
+
+
+def test_segmenter_timestamps_and_segment_ids_preserved():
+    """解耦后时间戳与 segment_ids 仍正确投影。"""
+    from app.services.subtitle_segmenter import SubtitleSegmenter
+
+    segs = [
+        {"id": "seg_e_0", "start_ms": 0, "end_ms": 1000, "_index": 0,
+         "text_original": "raw asr zero", "text_with_punct": "Raw ASR zero."},
+        {"id": "seg_e_1", "start_ms": 1000, "end_ms": 2000, "_index": 1,
+         "text_original": "raw asr one", "text_with_punct": "Raw ASR one."},
+    ]
+    paras = SubtitleSegmenter().segment(segs)
+    p = paras[0]
+    assert p["start_ms"] == 0
+    assert p["end_ms"] == 2000
+    assert p["segment_ids"] == ["seg_e_0", "seg_e_1"]
 
 
 def test_segment_with_translated_text():

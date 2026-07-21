@@ -13,6 +13,7 @@ from typing import Callable, Optional
 
 from ..llm import chat_json
 from ..llm_pipeline import translate_segments
+from ..utils.text_cleaners import preclean_mechanical
 from .subtitle_align import semantic_ok
 
 logger = logging.getLogger(__name__)
@@ -20,23 +21,30 @@ logger = logging.getLogger(__name__)
 POLISH_BATCH_SIZE = 15
 POLISH_MAX_TOKENS = 8000
 
-POLISH_SYSTEM = """你是专业的播客字幕编辑。对 ASR 字幕(中文或英文)做两件事:
+POLISH_SYSTEM = """你是专业的播客字幕编辑。对 ASR 字幕(中文或英文)做四件事:
 
-1. **补充正确标点**: ASR 标点经常不准/缺失/错位。根据语义重新加正确标点让字幕自然可读。
+1. **补充正确标点**: ASR 标点经常不准/缺失/错位。根据语义重新加正确标点。
    - 中文: 逗号、句号、问号、感叹号、顿号、分号
    - 英文: comma, period, question mark, exclamation mark, semicolon, colon; 修正首字母大写与句末标点
 
-2. **去除口水话和无意义填充**, 但保留有语义作用的词:
-   - 中文: 删 "嗯""啊""呃""那个""然后呢""就是说""对吧""你看""的话""就是这个" 等口头禅/语气词/无意义重复
-   - 英文: 删 "um", "uh", "er", "ah", "hmm", "you know", "I mean", "like"(填充), "sort of", "kind of", "basically", "actually", "literally"(填充), 以及无意义重复("the the", "I I")
+2. **去除口水话和无意义填充**, 保留有语义作用的词:
+   - 中文: 删 "嗯""啊""呃""那个""然后呢""就是说""对吧""你看""的话""就是这个" 等口头禅/语气词
+   - 英文: 删 "um", "uh", "er", "ah", "hmm", "you know", "I mean", "like"(填充), "sort of", "kind of", "basically", "actually", "literally"(填充)
    - 中文"然后/因为"、英文 "because/therefore/however/so"(表逻辑) → 保留
-   - 人名/产品名/公司名/数字/术语 → 原样保留
+
+3. **折叠叠词/口吃**:
+   - 中文: "我我我"→"我"、"这个这个"→"这个"、连续重复的字或词折叠成一次
+   - 英文: "the the"→"the"、"I I"→"I"、"very very"→"very"(折叠连续重复词)
+
+4. **矫正专业名词与人名**(按提供的【规范写法表】):
+   - ASR 听错的专有名词 → 矫正为表中的规范写法(保证全文一致)
+   - 表中未列的专有名词: 若明显是 ASR 错听且你确信正确写法, 可矫正; 否则原样保留, 绝不臆造
+   - 普通词/数字不改
 
 **绝对铁律(违反任一条都算失败)**:
 - 不改变语义, 不增删信息, 不修正事实, 不补全省略
 - 输出语言与输入相同(不翻译)
 - 输出句数严格等于输入句数, 按 id 一一对应, 不改顺序/不合并/不拆分
-- 人名/产品名/公司名/数字/术语原样保留(Manus、OpenAI、2025、GPT-4)
 - 某句已很好则原样输出"""
 
 
@@ -70,21 +78,27 @@ def _already_punctuated(transcript) -> bool:
     return (end_count / len(text)) >= POLISH_SKIP_MIN_END_DENSITY
 
 
-def _build_polish_user(inputs: list) -> str:
+def _build_polish_user(inputs: list, entity_variants: dict = None) -> str:
     import json
-    return f"""以下是 {len(inputs)} 句 ASR 字幕(中文或英文), 逐句优化(加标点 + 去口水话)。保持每句原有语言, 不要翻译。
-
-输入字幕(JSON 数组):
-{json.dumps(inputs, ensure_ascii=False, indent=2)}
-
-输出 JSON(严格格式):
-{{
-  "polished": [
-    {{"id": 0, "text": "第 0 句优化后的文本"}}
-  ]
-}}
-
-务必: polished 数组长度 = {len(inputs)}; 每个 id 与输入相同; 输出语言与输入相同; 只改标点和口水话, 不改语义; 不合并/拆分/换序。"""
+    lines = [f"以下是 {len(inputs)} 句 ASR 字幕(中文或英文), 逐句优化。保持每句原有语言, 不要翻译。"]
+    if entity_variants:
+        # 展示成 "错误写法 → 规范写法" 列表(去重, 跳过 v==c)
+        pairs = sorted({f"{v} → {c}" for v, c in entity_variants.items() if v != c})
+        if pairs:
+            lines.append("\n【专有名词规范写法表】(务必按此矫正, 保证全文一致):")
+            lines.append("\n".join(pairs))
+    lines.append(f"\n输入字幕(JSON 数组):\n{json.dumps(inputs, ensure_ascii=False, indent=2)}")
+    lines.append(
+        "\n输出 JSON(严格格式):\n"
+        "{\n"
+        '  "polished": [\n'
+        '    {"id": 0, "text": "第 0 句优化后的文本"}\n'
+        "  ]\n"
+        "}\n\n"
+        f"务必: polished 数组长度 = {len(inputs)}; 每个 id 与输入相同; 输出语言与输入相同; "
+        "只做标点/口水话/叠词/专有名词矫正, 不改语义; 不合并/拆分/换序。"
+    )
+    return "\n".join(lines)
 
 
 class SubtitleProcessor:
@@ -99,11 +113,18 @@ class SubtitleProcessor:
         assert cur == snapshot, "不可变性违反: id/start_ms/end_ms/text_original 被改动"
 
     # ---------- 润色 ----------
-    async def polish(self, transcript, progress_cb: Optional[Callable] = None) -> int:
+    async def polish(self, transcript, progress_cb: Optional[Callable] = None,
+                     entity_variants: Optional[dict] = None,
+                     force: bool = False) -> int:
         """润色所有 segment 的 text_with_punct(双语)。返回实际接受的句数。
 
-        每个 text_original 非空的 segment, 处理后 text_with_punct 必非空:
-        LLM 输出通过 semantic_ok 才接受, 否则回退 text_original(drift/语义被改/漏返/异常)。
+        每个 text_original 非空的 segment: 先 preclean_mechanical 去机械垃圾, 再喂 LLM
+        (注入 entity_variants 规范表); 输出经 semantic_ok(entity_variants) 校验才接受,
+        否则回退到 preclean_mechanical 后的原文(零语义改动)。drift/语义被改/漏返/异常均回退。
+
+        force=True 时强制进入 LLM polish, 跳过 _already_punctuated 的"manual CC 跳过"判定。
+        Apple AFM 3 等 ASR 会自带部分标点, 句末标点密度达标会被误判为 manual CC 而跳过清洗;
+        但 ASR 仍需人名/术语矫正、去口水词、折叠叠词口吃 —— 故 pipeline 对 ASR 源传 force=True。
         """
         segments = transcript.segments
         total = len(segments)
@@ -111,7 +132,8 @@ class SubtitleProcessor:
             return 0
         # 已有完整标点(manual CC) → 跳过 LLM polish, 直接用原文。
         # 省下大段数 CC 的 ~780 批 LLM 调用; 代价是保留填充词(不影响理解)。
-        if _already_punctuated(transcript):
+        # force=True(ASR 源)绕过此优化: ASR 即便带标点也要做人名/术语/口水词矫正。
+        if not force and _already_punctuated(transcript):
             logger.info(
                 f"[polish] 跳过 {total} 段: 已有完整标点(判定 manual CC), "
                 f"text_with_punct=text_original"
@@ -122,17 +144,18 @@ class SubtitleProcessor:
             if progress_cb:
                 progress_cb(1.0, total, total)
             return 0
+        ev = entity_variants or {}
         polished = 0
         for start in range(0, total, POLISH_BATCH_SIZE):
             batch = segments[start:start + POLISH_BATCH_SIZE]
-            inputs = [{"id": s.id, "text": s.text_original}
+            inputs = [{"id": s.id, "text": preclean_mechanical(s.text_original or "")}
                       for s in batch if (s.text_original or "").strip()]
             pmap: dict = {}
             if inputs:
                 try:
                     result = await chat_json(
                         system=POLISH_SYSTEM,
-                        user=_build_polish_user(inputs),
+                        user=_build_polish_user(inputs, ev),
                         temperature=0.2,
                         max_tokens=POLISH_MAX_TOKENS,
                         response_format={"type": "json_object"},
@@ -146,11 +169,12 @@ class SubtitleProcessor:
                 if not (s.text_original or "").strip():
                     continue  # 原文为空(ASR 空段): 不丢段, 不强行填空
                 out = pmap.get(s.id, "")
-                if out and semantic_ok(out, s.text_original):
+                if out and semantic_ok(out, s.text_original, entity_variants=ev):
                     s.text_with_punct = out
                     accepted += 1
                 else:
-                    s.text_with_punct = s.text_original  # 回退 = 零语义改动
+                    # 回退 = 机械预清洗后的原文(无语义损失, 仅去 HTML/标记/零宽垃圾)
+                    s.text_with_punct = preclean_mechanical(s.text_original)
             polished += accepted
             logger.info(f"[polish] 批 {start}-{start+len(batch)}/{total}: 接受 {accepted}/{len(inputs)}")
             if progress_cb:

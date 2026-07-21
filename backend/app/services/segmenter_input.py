@@ -41,14 +41,19 @@ def segments_for_segmenter(transcript) -> List[Dict[str, Any]]:
     """
     out: List[Dict[str, Any]] = []
     for i, seg in enumerate(transcript.segments):
+        # 清洗已由 LLM polish 写入 text_with_punct; 此处把清洗文本作为投影源同时
+        # 放进 text_original(视图)与 text_with_punct, 供分段器纯投影(不再内部清洗)。
+        view_text = seg.text_with_punct or seg.text_original
         out.append(
             {
                 # id 保持现有语义：seg_<episode_id>_<seg.id>（seg.id 是 int）
                 "id": f"seg_{transcript.episode_id}_{seg.id}",
                 "start_ms": seg.start_ms,
                 "end_ms": seg.end_ms,
-                # P1 核心：优先用润色后的带标点文本
-                "text_original": seg.text_with_punct or seg.text_original,
+                # P1 核心：优先用润色后的带标点文本(不可变源 Segment.text_original 不动)
+                "text_original": view_text,
+                # 分段器投影源: 与 text_original 同值(均为清洗后展示文本); 缺失时均为原文
+                "text_with_punct": view_text,
                 "text_translated": seg.text_translated,
                 "_index": i,
             }

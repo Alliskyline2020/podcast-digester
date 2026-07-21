@@ -21,8 +21,10 @@ EN_FILLERS = [
 ]
 
 _PUNCT_RE = re.compile(r"[，。！？、；：""''（）【】《》…\s,.!?;:\"'()\[\]<>\\-]")
+# 连续 ≥3 个相同字符(口吃/叠词, 如 "我我我""嗯嗯嗯")→ 折叠为 1 个
+_STUTTER_RE = re.compile(r"(.)\1{2,}")
 
-LCS_PRESERVE_MIN = 0.90  # 实义内容保留率下限(口水话已剔除后)
+LCS_PRESERVE_MIN = 0.90  # 实义内容保留率下限(口水话/叠词已剔除后)
 LCS_ADD_MAX = 0.15       # 新增率上限(防幻觉/换词)
 
 
@@ -43,6 +45,18 @@ def remove_fillers(text: str) -> str:
     return out
 
 
+def collapse_repetition(text: str) -> str:
+    """折叠口吃/叠词: 连续 ≥3 个相同字符 → 1 个。
+
+    只折叠 ≥3 的重复(无歧义的口吃), 不动 2 连——中文有大量合法叠字
+    (爸爸/姐姐/慢慢/常常), 折叠 2 连会破坏它们。两侧同样折叠, 使 LLM
+    的口吃折叠(我我我→我)不触发 LCS 漂移; 真正丢内容仍被判漂移。
+    """
+    if not text:
+        return text
+    return _STUTTER_RE.sub(r"\1", text)
+
+
 def _lcs_len(a: str, b: str) -> int:
     """字符级最长公共子序列长度(空间优化, O(min(len)) 内存)。"""
     if not a or not b:
@@ -60,17 +74,44 @@ def _lcs_len(a: str, b: str) -> int:
     return prev[len(b)]
 
 
-def semantic_ok(polished: str, original: str) -> bool:
+def _apply_entities(text: str, variants: dict) -> str:
+    """把已知变体替换为规范写法(长串优先, 避免短串破坏长串)。"""
+    if not variants:
+        return text
+    for wrong, correct in sorted(variants.items(), key=lambda kv: -len(kv[0])):
+        if wrong:
+            text = text.replace(wrong, correct)
+    return text
+
+
+def _normalize_variants(variants: dict) -> dict:
+    """把实体表的 key/value 归一到 normalize() 的形式(去标点/小写)。"""
+    out = {}
+    for wrong, correct in (variants or {}).items():
+        nw, nc = normalize(wrong), normalize(correct)
+        if nw:
+            out[nw] = nc
+    return out
+
+
+def semantic_ok(polished: str, original: str, entity_variants: dict = None) -> bool:
     """口水话感知双向 LCS 校验。
 
-    返回 True 当且仅当 polished 在实义内容上与 original 一致(只删了白名单口水话、加了标点)。
+    返回 True 当且仅当 polished 在实义内容上与 original 一致(只删了白名单口水话、
+    折叠了口吃/叠词、加了标点、或替换了 entity_variants 内授权的专有名词变体)。
     drift(邻段内容)或语义篡改(丢实义内容/幻觉/换词)都返回 False。
 
-    边界: original 去口水话后为空(纯口水话句)时, 只要 polished 也很短即通过
-    (空 polished 由调用方的非空检查兜底回退原文)。
+    entity_variants: {错误变体: 规范写法}。LCS 前把两侧的已知变体归一到规范写法,
+    使授权的人名/术语矫正不触发漂移; 表外矫正仍被 LCS 抓住(防过度纠正)。
+
+    边界: original 去口水话后为空(纯口水话句)时, 只要 polished 也很短即通过。
     """
-    o = remove_fillers(normalize(original))
-    p = remove_fillers(normalize(polished))
+    o = collapse_repetition(remove_fillers(normalize(original)))
+    p = collapse_repetition(remove_fillers(normalize(polished)))
+    if entity_variants:
+        nv = _normalize_variants(entity_variants)
+        o = _apply_entities(o, nv)
+        p = _apply_entities(p, nv)
     if not o:
         return len(p) <= 2
     lcs = _lcs_len(o, p)

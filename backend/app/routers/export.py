@@ -47,7 +47,12 @@ async def export_episode_summary(
     - PNG: 适合社交媒体分享的长图
     """
     # 速率限制由路由依赖 rate_limit(3, 60) 强制执行
-    from ..export import render_html_template, render_png_from_html, render_pdf_from_html
+    from ..export import (
+        render_html_template,
+        render_png_from_html,
+        render_pdf_from_html,
+        build_transcript_export,
+    )
 
     # 1. 加载节目数据（从文件系统）
     data_dir = DATA_DIR
@@ -63,6 +68,7 @@ async def export_episode_summary(
     # 回退：transcript.json 的 meta（旧路径，无 DB 记录时）
     transcript_file = media_dir / "transcript.json"
     episode_meta = {}
+    transcript_data = None
     if transcript_file.exists():
         transcript_data = safe_read_json(transcript_file)
         if transcript_data:
@@ -118,16 +124,26 @@ async def export_episode_summary(
             logger.info("Loaded product_insights from product_insights.json")
 
     # 6. 准备导出数据
+    # 完整字幕段落(原文字幕): 仅在 include_transcript=True 时构建。
+    # 用 LLM 清洗后的 text_with_punct, 亮点段(来自 highlight.cited_segment_ids)加粗。
+    paragraph_mappings = (db_episode or {}).get('paragraph_mappings')
+    transcript_paragraphs = build_transcript_export(
+        transcript_data,
+        paragraph_mappings,
+        highlights,
+        request.include_transcript,
+    )
+
     export_data = {
         'episode': episode,
         'chapters': chapters or [],
         'summaries': summaries or [],
         'highlights': highlights,
         'product_insights': product_insights or {},
-        'transcript': []  # 暂时不包含完整字幕
+        'transcript': transcript_paragraphs,
     }
 
-    logger.info(f"Export data prepared: {len(export_data['chapters'])} chapters, {len(export_data['summaries'])} summaries, {len(export_data['highlights'])} highlights")
+    logger.info(f"Export data prepared: {len(export_data['chapters'])} chapters, {len(export_data['summaries'])} summaries, {len(export_data['highlights'])} highlights, {len(transcript_paragraphs)} transcript paragraphs (include_transcript={request.include_transcript})")
 
     # 6. 生成文件名和路径
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

@@ -349,6 +349,86 @@
             color: var(--text-secondary);
         }
 
+        .transcript-section {
+            margin-bottom: 40px;
+        }
+
+        .transcript-head {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 20px;
+        }
+
+        .transcript-legend {
+            font-size: 12px;
+            color: var(--text-secondary);
+            white-space: nowrap;
+        }
+
+        .transcript-legend .hl-swatch {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 2px;
+            background: var(--accent);
+            margin-right: 5px;
+            vertical-align: middle;
+        }
+
+        .transcript-body {
+            background: var(--bg-secondary);
+            border-radius: 16px;
+            padding: 28px 32px;
+        }
+
+        .transcript-para {
+            display: flex;
+            gap: 14px;
+            margin-bottom: 22px;
+            align-items: flex-start;
+            padding-left: 10px;
+            border-left: 2px solid transparent;
+        }
+
+        .transcript-para:last-child {
+            margin-bottom: 0;
+        }
+
+        .transcript-para.para-has-highlight {
+            border-left-color: var(--accent);
+        }
+
+        .transcript-time {
+            font-family: 'SF Mono', Monaco, Consolas, monospace;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--accent);
+            background: var(--accent-light);
+            padding: 3px 10px;
+            border-radius: 8px;
+            white-space: nowrap;
+            flex-shrink: 0;
+            margin-top: 2px;
+        }
+
+        .transcript-text {
+            font-size: 15px;
+            line-height: 1.95;
+            color: var(--text-primary);
+            flex: 1;
+        }
+
+        .transcript-text .hl-sentence {
+            font-weight: 700;
+            color: var(--text-primary);
+            background: linear-gradient(transparent 62%, var(--accent-light) 62%);
+            padding: 0 1px;
+            border-radius: 2px;
+        }
+
         @media (max-width: 768px) {
             body {
                 padding: 16px;
@@ -364,6 +444,14 @@
 
             .section h2 {
                 font-size: 24px;
+            }
+
+            .transcript-body {
+                padding: 20px 18px;
+            }
+
+            .transcript-para {
+                gap: 10px;
             }
         }
     </style>
@@ -458,6 +546,25 @@
                 </div>
             </div>
             {% endfor %}
+        </section>
+        {% endif %}
+
+        {% if include_transcript and transcript %}
+        <section class="section transcript-section">
+            <div class="transcript-head">
+                <h2>原文字幕</h2>
+                <span class="transcript-legend"><span class="hl-swatch"></span>加粗为亮点原话</span>
+            </div>
+            <div class="transcript-body">
+                {% for para in transcript %}
+                <div class="transcript-para{% if para.has_highlight %} para-has-highlight{% endif %}">
+                    <span class="transcript-time">⏱ {{ para.start_time }}</span>
+                    <p class="transcript-text">
+                        {% for seg in para.segments %}{% if seg.highlight %}<strong class="hl-sentence">{{ seg.text }}</strong>{% else %}{{ seg.text }}{% endif %}{% if not loop.last %} {% endif %}{% endfor %}
+                    </p>
+                </div>
+                {% endfor %}
+            </div>
         </section>
         {% endif %}
 

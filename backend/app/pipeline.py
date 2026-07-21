@@ -29,6 +29,8 @@ from .llm_pipeline.llm_launch_analyze import analyze_launch_specs
 from .llm_pipeline.llm_podcast_analyze import analyze_podcast_insights_parallel
 from .services.subtitle_segmenter import SubtitleSegmenter
 from .services.subtitle_processor import SubtitleProcessor
+from .services.entity_harvest import harvest_entities, expand_glossary
+from .services.glossary import get_glossary
 
 
 logger = logging.getLogger(__name__)
@@ -250,10 +252,15 @@ class AudioProcessPipeline:
         if not transcript:
             transcript = parse_result.extra.get("transcript")
 
+        # 记录字幕来源: "cc"(平台/手动字幕) 还是 "asr"(语音识别)。
+        # Apple AFM 3 等 ASR 会自带部分标点, polish 的"已有标点则跳过"判定会对它误判;
+        # ASR 仍需矫正人名/术语、去口水词、折叠叠词 —— 故对 ASR 源强制清洗。
+        transcript_source = "cc"
         if not transcript:
             logger.info(f"No subtitle available for {episode_id}, falling back to Apple AFM 3 ASR")
             transcript = await run_asr(parse_result.audio_path, None)
             transcript.episode_id = episode_id
+            transcript_source = "asr"
         else:
             logger.info(f"Using transcript ({len(transcript.segments)} segments, lang={transcript.language}) for {episode_id}")
             transcript.episode_id = episode_id
@@ -263,19 +270,16 @@ class AudioProcessPipeline:
         if transcript.language:
             await EpisodeRepository.update(episode_id, language=transcript.language)
 
-        # 生成字幕段落映射
-        await self._generate_paragraph_mappings(episode_id, transcript)
-
-        # === 阶段 2.5: 字幕润色（双语，加标点+去口水话，时间戳/语义/段数不变）===
-        await SubtitleProcessor().polish(
+        # === 阶段 2.5: 字幕清洗（机械预清洗 + 实体收割 + LLM 清洗）===
+        # polish 前不再生成 raw ASR 段落（无意义——清洗已与分段器解耦）。
+        # 收割人名/术语 → polish 注入实体表 → 生成段落映射（投影 text_with_punct）。
+        # ASR 源传 force_polish=True → 跳过 manual-CC 跳过判定, 强制清洗。
+        await self._clean_transcript(
+            episode_id,
             transcript,
-            progress_cb=self._make_db_progress_cb(stages, "transcribe", episode_id),
+            polish_progress_cb=self._make_db_progress_cb(stages, "transcribe", episode_id),
+            force_polish=transcript_source == "asr",
         )
-
-        # P1：润色后重新生成段落映射，让段落字幕消费 text_with_punct（带标点+去口水话）
-        # 而非上面 line-261 用 raw ASR 生成的版本。早期那次调用保留——保证 transcribe
-        # 一完成字幕就可见；这里是"最终态"刷新。
-        await self._generate_paragraph_mappings(episode_id, transcript)
 
         self._checkpoint_json(episode_id, "transcript.json", transcript.model_dump())
         await self._complete_stage(stages, "transcribe", completed_stages, sync_stages)
@@ -611,6 +615,44 @@ class AudioProcessPipeline:
             return Transcript(**data)
 
         return load_json_with_callback(transcript_file, prepare_transcript)
+
+    async def _clean_transcript(
+        self,
+        episode_id: str,
+        transcript,
+        polish_progress_cb: Optional[Callable] = None,
+        force_polish: bool = False,
+    ) -> None:
+        """清洗管线: 实体收割(全文一致) → polish(注入实体表) → 段落映射(投影 text_with_punct)。
+
+        - 实体收割每集一次, 用用户 glossary 作种子, 失败时退化为仅 glossary/空表。
+        - 机械预清洗已由 polish 内部 preclean_mechanical 完成, 此处不再单独做。
+        - polish 后生成一次段落映射(分段器已解耦, 纯投影 text_with_punct)。
+          翻译仍在主流程独立阶段进行(translate 不改展示文本结构, 其段落刷新留在主流程)。
+        - force_polish=True(ASR 源): 绕过 polish 的"已有标点则跳过"判定, 强制清洗人名/术语/口水词。
+        """
+        # 1) 实体收割(glossary 种子) —— data_dir 可能缺失(resume/__new__ 测试场景), 防御
+        data_dir = getattr(self, "data_dir", None)
+        try:
+            cache = get_glossary(data_dir).cache if data_dir is not None else {}
+        except Exception as e:
+            logger.warning(f"[clean] glossary 读取失败, 用空种子: {e}")
+            cache = {}
+        glossary_variants = expand_glossary(cache)
+        full_text = " ".join((s.text_original or "") for s in transcript.segments)
+        entity_variants = await harvest_entities(full_text, glossary_variants=glossary_variants)
+
+        # 2) polish(注入实体表: 人名/术语全文一致矫正)
+        #    force_polish=True(ASR 源) → polish(force=True): 跳过 manual-CC 跳过判定。
+        await SubtitleProcessor().polish(
+            transcript,
+            progress_cb=polish_progress_cb,
+            entity_variants=entity_variants,
+            force=force_polish,
+        )
+
+        # 3) polish 后生成段落映射(消费 text_with_punct, 分段器纯投影)
+        await self._generate_paragraph_mappings(episode_id, transcript)
 
     async def _generate_paragraph_mappings(self, episode_id: str, transcript):
         """生成字幕段落映射（idempotent，可多次调用）

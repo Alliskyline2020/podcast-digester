@@ -297,3 +297,28 @@ def is_text_clean(text: str, check_html: bool = True) -> bool:
         return False
 
     return True
+
+
+# 音频事件标记(机械噪声): [音乐] [掌声] [笑声] [Music] [Applause] 等
+_AUDIO_MARKER_RE = re.compile(
+    r"\[(?:音乐|笑声?|掌声?|applause|music|laughter|noise|silence)\]",
+    re.IGNORECASE,
+)
+# 零宽 / 方向控制字符(U+200B-200F, U+202A-202E, U+FEFF)
+_ZERO_WIDTH_RE = re.compile(r"[​-‏‪-‮﻿]")
+
+
+def preclean_mechanical(text: str) -> str:
+    """确定性机械清洗: HTML 实体/标签、音频事件标记、零宽字符、空白。
+
+    不删口水话/叠词/不改语义(那是 LLM 清洗的职责)。用于 LLM 清洗前的
+    廉价预处理, 避免把机械垃圾喂给 LLM 浪费 token。
+    """
+    if not text or not isinstance(text, str):
+        return ""
+    text = decode_html_entities(text)
+    text = remove_html_tags(text)
+    text = _AUDIO_MARKER_RE.sub("", text)
+    text = _ZERO_WIDTH_RE.sub("", text)
+    text = normalize_whitespace(text)
+    return text

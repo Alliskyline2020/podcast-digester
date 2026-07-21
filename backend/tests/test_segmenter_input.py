@@ -154,8 +154,12 @@ class TestSegmenterConsumesPolishedText:
 
 class TestRegenerateAfterPolishSequencing:
     """Lightweight sequencing guard: _generate_paragraph_mappings must run
-    AFTER polish in _process_internal, so text_with_punct is populated when
-    the final paragraph_mappings are produced.
+    AFTER polish, so text_with_punct is populated when the final
+    paragraph_mappings are produced.
+
+    Polish + post-polish regeneration now live in `_clean_transcript`;
+    `_process_internal` delegates to it. Translate (and its own regeneration)
+    remain inline in `_process_internal`.
 
     Chosen approach (per brief deviation note): static code-level assertion
     via `inspect`. The full async pipeline has too many side-effecting
@@ -166,19 +170,28 @@ class TestRegenerateAfterPolishSequencing:
     of the surrounding stages.
     """
 
-    def test_process_internal_calls_generate_after_polish(self):
+    def test_clean_transcript_regenerates_after_polish(self):
         import inspect
         from app.pipeline import AudioProcessPipeline
 
-        source = inspect.getsource(AudioProcessPipeline._process_internal)
+        source = inspect.getsource(AudioProcessPipeline._clean_transcript)
 
         # Polish call ...
-        assert ".polish(" in source, "_process_internal must call SubtitleProcessor().polish"
+        assert ".polish(" in source, "_clean_transcript must call SubtitleProcessor().polish"
         # ... must precede a regeneration call to _generate_paragraph_mappings
         polish_idx = source.index(".polish(")
         regen_idx = source.index("_generate_paragraph_mappings", polish_idx)
         assert regen_idx > polish_idx, (
-            "_generate_paragraph_mappings must be re-invoked AFTER polish completes"
+            "_generate_paragraph_mappings must run AFTER polish in _clean_transcript"
+        )
+
+    def test_process_internal_delegates_to_clean_transcript(self):
+        import inspect
+        from app.pipeline import AudioProcessPipeline
+
+        source = inspect.getsource(AudioProcessPipeline._process_internal)
+        assert "_clean_transcript" in source, (
+            "_process_internal must delegate cleaning (polish+regen) to _clean_transcript"
         )
 
     def test_process_internal_calls_generate_after_translate(self):
