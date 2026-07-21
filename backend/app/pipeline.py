@@ -15,7 +15,7 @@ from .asr_afm3 import run_asr
 from .storage import save_episode_bundle, EpisodeManager
 from .errors import ConcurrencyError
 from .config import (
-    STAGE_CONFIG, STAGE_ORDER, calculate_overall_progress,
+    STAGE_CONFIG, STAGE_ORDER, calculate_overall_progress, settings,
 )
 
 # LLM 处理模块
@@ -226,6 +226,12 @@ class AudioProcessPipeline:
             title_zh=title_zh,
             media_path=str(parse_result.audio_path),
             language=parse_result.language,
+        )
+
+        # 导出按标题命名的音频副本到「音频库」目录（中文标题优先，回退原始），
+        # 方便用户按标题查找原始音频；仅复制，不影响后续转录/洞察。
+        await self._save_audio_to_library(
+            parse_result.audio_path, title_zh, parse_result.title
         )
 
         await self._complete_stage(stages, "download", completed_stages, sync_stages)
@@ -564,6 +570,35 @@ class AudioProcessPipeline:
         except Exception as e:
             logger.warning(f"标题翻译失败 ({title[:40]}...): {e}")
             return None
+
+    async def _save_audio_to_library(
+        self, audio_path: Path, title_zh: Optional[str], original_title: str
+    ) -> None:
+        """下载后把音频副本导出到「音频库」目录（中文标题优先，回退原始）。
+
+        只复制、不移动 pipeline 内部那份（转录/洞察还要读 data/media/<id>/）。
+        用 to_thread 包同步拷贝，避免大文件阻塞事件循环。
+        失败只记日志、不抛错 —— 音频库是便利功能，绝不能拖垮主流程。
+        """
+        try:
+            from .utils.audio_library import save_audio_to_library
+
+            display_title = (title_zh or original_title or "").strip()
+            if not display_title:
+                logger.warning(f"[audio_library] {audio_path} 无可用标题，跳过导出")
+                return
+
+            dest = await asyncio.to_thread(
+                save_audio_to_library,
+                audio_path,
+                display_title,
+                settings.audio_library_dir,
+            )
+            logger.info(f"[audio_library] 已导出音频副本: {dest.name}")
+        except Exception as e:
+            logger.warning(
+                f"[audio_library] 导出音频副本失败，已跳过（不影响主流程）: {e}"
+            )
 
     async def _load_transcript(self, episode_id: str) -> Optional[Transcript]:
         """从文件加载 transcript"""

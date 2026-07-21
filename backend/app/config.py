@@ -31,6 +31,15 @@ class Settings:
             str(Path(__file__).parent.parent.parent / "data")
         ))
 
+        # ==================== 音频库（按标题命名的导出目录）====================
+        # 下载后把音频「副本」按标题复制到这里，方便用户按标题查找原始音频。
+        # 默认在 data_dir/audio_library 下，可用环境变量改到任意位置（如 ~/Downloads）。
+        # pipeline 内部仍保留 data/media/<episode_id>/ 那份，供转录/洞察使用 —— 这里只导出副本。
+        self.audio_library_dir = Path(os.getenv(
+            "PODCAST_DIGESTER_AUDIO_OUTPUT_DIR",
+            str(self.data_dir / "audio_library"),
+        ))
+
         # ==================== LLM API ====================
         # 统一多 provider 配置。LLM_* 为正式变量；DEEPSEEK_* 为向后兼容别名
         # （单用户自托管，不复用 key）。实际读取/校验/SSRF 守卫在 app/llm/config.py:get_config()。
