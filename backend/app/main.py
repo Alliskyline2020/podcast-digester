@@ -5,6 +5,7 @@ REST API 入口
 import asyncio
 import logging
 import time
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict, Any
@@ -85,10 +86,35 @@ class HealthResponse(BaseModel):
 
 # ==================== 应用初始化 ====================
 
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    """应用生命周期（取代已弃用的 @app.on_event("startup")）。
+
+    启动：init_db → 拉起 task_recovery 后台任务；yield 后进入服务期。
+    关闭：当前无额外清理（Worker 单例锁、DB 连接随进程退出自动释放）。
+    """
+    log = logging.getLogger(__name__)
+    log.info("Starting Podcast Digester backend")
+    try:
+        await init_db()
+        log.info("Database initialized successfully")
+    except Exception as e:
+        log.error(f"Database initialization failed: {e}")
+        raise
+
+    # 恢复未完成的任务（后台任务，不阻塞启动）
+    from .task_recovery import recover_pending_tasks
+    _create_background_task(recover_pending_tasks(), name="recover_pending_tasks")
+    log.info("Task recovery started")
+
+    yield
+
+
 app = FastAPI(
     title="Podcast Digester",
     description="播客/发布会内容摘要引擎",
-    version="0.2.1-m2p",
+    version=settings.app_version,
+    lifespan=lifespan,
 )
 
 # CORS 配置
@@ -183,29 +209,6 @@ def general_exception_handler(request, exc: Exception) -> JSONResponse:
     )
 
 
-# ==================== 启动事件 ====================
-
-@app.on_event("startup")
-async def startup():
-    """应用启动时初始化"""
-    import logging
-    logger = logging.getLogger(__name__)
-
-    logger.info("Starting Podcast Digester backend")
-
-    try:
-        await init_db()
-        logger.info("Database initialized successfully")
-    except Exception as e:
-        logger.error(f"Database initialization failed: {e}")
-        raise
-
-    # 恢复未完成的任务
-    from .task_recovery import recover_pending_tasks
-    _create_background_task(recover_pending_tasks(), name="recover_pending_tasks")
-    logger.info("Task recovery started")
-
-
 # ==================== 健康检查 ====================
 
 @app.get("/", response_model=HealthResponse)
@@ -213,7 +216,7 @@ async def health():
     """健康检查"""
     return {
         "name": "podcast-digester",
-        "version": "0.2.1-m2p",
+        "version": settings.app_version,
         "status": "healthy",
     }
 

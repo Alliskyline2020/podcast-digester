@@ -9,6 +9,7 @@ import asyncio
 import fcntl
 import logging
 import os
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -211,6 +212,17 @@ class Worker:
         from app.ingest import pipeline
 
         logger.info("Worker started")
+
+        # 优雅退出：SIGTERM/SIGINT → stop()，让当前轮处理完后主循环自然退出。
+        # （fcntl 单例锁本就会随进程退出自动释放；此处只让循环体面收尾、
+        # 避免被 SIGTERM 直接打断正在跑的 pipeline。）
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            try:
+                loop.add_signal_handler(sig, self.stop)
+            except (NotImplementedError, RuntimeError):
+                # 非 POSIX 或无事件循环时回退：交给默认信号行为（进程退出）
+                pass
 
         while self.running:
             try:

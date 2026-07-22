@@ -49,6 +49,11 @@ if command -v ffmpeg >/dev/null 2>&1; then
 else
   c_warn "⚠️  未检测到 ffmpeg（yt-dlp 后处理需要）。macOS: brew install ffmpeg  |  Linux: sudo apt install ffmpeg"
 fi
+# 代理提示：pip / playwright / npm 均遵从 HTTPS_PROXY 环境变量。
+# 中国大陆网络下若依赖下载失败，先 export HTTPS_PROXY=http://127.0.0.1:7897 再重跑。
+if [ -z "${HTTPS_PROXY:-}" ] && [ -z "${https_proxy:-}" ]; then
+  c_warn "ⓘ  未检测到 HTTPS_PROXY：若 pip/playwright/npm 下载失败，请 export HTTPS_PROXY 后重跑"
+fi
 echo
 
 # ── 1. 后端虚拟环境 + Python 依赖 ──

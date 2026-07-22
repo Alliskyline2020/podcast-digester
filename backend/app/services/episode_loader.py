@@ -8,7 +8,7 @@ Episode 数据加载助手。
 - _load_episode_bundle：组装完整 EpisodeBundle（episode + transcript +
   outline + summaries + highlight + ingest_job + product_insights）
 
-文件系统读用 deps.data_dir 属性访问（不用 \`from ..deps import data_dir\`），
+文件系统读用 deps.data_dir 属性访问（不用 `from ..deps import data_dir`），
 以便 conftest 的 temp_data_dir fixture 能在测试时打补丁。
 """
 import asyncio
