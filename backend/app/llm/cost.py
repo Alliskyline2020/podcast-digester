@@ -11,9 +11,15 @@ logger = logging.getLogger(__name__)
 # 价格表：USD per 1M tokens。新增 provider 时按官方定价页补条目。
 # 字段含义：{"input": 输入单价, "output": 输出单价}
 COST_PER_1M_TOKENS: dict[str, dict[str, float]] = {
-    # DeepSeek
-    "deepseek-chat": {"input": 0.14, "output": 0.28},
-    "deepseek-reasoner": {"input": 0.55, "output": 2.19},
+    # DeepSeek —— V4 系列（当前主力）。定价来源（每 1M tokens，cache miss 输入价）：
+    # https://api-docs.deepseek.com/quick_start/pricing （2026/07 核对）
+    # 注意：deepseek-chat / deepseek-reasoner 旧名将于 2026/07/24 15:59 UTC 废弃，
+    # 分别别名映射到 deepseek-v4-flash 的非思考/思考模式，故三者输入/输出单价同档。
+    # 原 deepseek-reasoner 的 $0.55/$2.19 是 R1 价，随 R1 下线作废。
+    "deepseek-v4-flash": {"input": 0.14, "output": 0.28},   # DeepSeek-V4-Flash（默认开思考模式）
+    "deepseek-v4-pro": {"input": 0.435, "output": 0.87},     # DeepSeek-V4-Pro
+    "deepseek-chat": {"input": 0.14, "output": 0.28},        # 旧名 → v4-flash 非思考模式
+    "deepseek-reasoner": {"input": 0.14, "output": 0.28},    # 旧名 → v4-flash 思考模式
     # OpenAI
     "gpt-4o-mini": {"input": 0.15, "output": 0.60},
     "gpt-4o": {"input": 2.50, "output": 10.00},

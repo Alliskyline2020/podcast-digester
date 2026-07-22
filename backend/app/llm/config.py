@@ -29,6 +29,10 @@ PROVIDERS: dict[str, dict] = {
         "title": "DeepSeek",
         "provider_type": "openai_compatible",
         "default_base_url": "https://api.deepseek.com",
+        # deepseek-chat = deepseek-v4-flash 的「非思考模式」(快/便宜)。deepseek-chat/reasoner
+        # 旧名 2026/07/24 废弃但仍别名可用；deepseek-v4-flash 默认开「思考模式」(更慢、token 消耗更大，
+        # 行为不同)，故默认保持 deepseek-chat(非思考)，而非直接切 v4-flash——避免静默改变默认推理行为。
+        # 切到 v4-flash/v4-pro 的成本已在 cost.py 计价。
         "default_model": "deepseek-chat",
         "region": "国内",
     },

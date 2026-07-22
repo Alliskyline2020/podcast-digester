@@ -13,6 +13,7 @@
 - **应用启动冒烟测试**：真实 HTTP 打 `GET /` 健康端点。
 
 ### 修复
+- **DeepSeek 成本计价表**：补 `deepseek-v4-flash`（$0.14/$0.28 per 1M）与 `deepseek-v4-pro`（$0.435/$0.87）两档；把 `deepseek-reasoner` 由过期的 R1 价（$0.55/$2.19）更正为 v4-flash 思考模式价（$0.14/$0.28）。此前在设置页选 `deepseek-v4-flash` 时会命中「未知模型」分支、全程按 $0 计费，使每集成本预算守护失效；选 `deepseek-reasoner` 则高估成本近 8 倍。背景：`deepseek-chat` / `deepseek-reasoner` 旧名将于 2026/07/24 废弃，分别别名映射到 `deepseek-v4-flash` 的非思考 / 思考模式。
 - 清理 3 个一次性 schema 搬运脚本（其建表工作已被 `init_db` 的 `CREATE TABLE IF NOT EXISTS` 覆盖），消除「看着该自动跑实则没接」的迁移脚本造成的 schema 漂移。
 - `.gitignore` 补 `.worker_pid` / `*_pid`（原 `*.pid` 不匹配）。
 

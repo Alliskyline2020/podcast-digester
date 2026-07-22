@@ -11,8 +11,9 @@ from ..llm import chat_json
 logger = logging.getLogger(__name__)
 
 HARVEST_MAX_CHARS = 12000  # 喂给 LLM 的全文上限(超长截断, 够抽实体)
-# 实体表是逐段清洗「人名/术语矫正」的授权来源，JSON 被截断会导致表空 → 人名不纠正。
-# 8000 预算留足余量，避免实体多时长文输出被 max_tokens 截断。对齐 polish 的 8000。
+# 实体表是逐段清洗「人名/术语矫正」的授权来源——JSON 一旦被截断，表就为空 → 人名不被矫正。
+# 默认模型 deepseek-chat(非思考)下 8000 是充裕输出余量；若用户在设置页切到默认开思考模式的
+# deepseek-v4-flash / deepseek-v4-pro，思考也消耗生成预算，更需要这余量防 JSON 被截断。与 POLISH_MAX_TOKENS 对齐。
 HARVEST_MAX_TOKENS = 8000
 
 HARVEST_SYSTEM = """你从播客转录文本里抽取【专有名词的规范写法】。只抽明确出现过的, 不臆造。
