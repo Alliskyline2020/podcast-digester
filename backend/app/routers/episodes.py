@@ -553,33 +553,18 @@ async def resume_episode(episode_id: str, request: ResumeRequest) -> ResumeRespo
             detail=f"只能恢复失败或完成的任务，当前状态：{status}"
         )
 
-    # 获取原始输入：请求体 > source 表 > usage_log（paste 一定写过）
+    # 获取原始输入：请求体优先 > source 表 > usage_log（paste 一定写过）
     raw_input = request.raw_input
     if not raw_input:
         from ..database import SourceRepository
-        source_data = await SourceRepository.get_by_episode(episode_id)
-        if source_data:
-            raw_input = source_data.get("raw_input")
-            logger.info(f"从 source 表恢复原始URL: {raw_input}")
+        raw_input = await SourceRepository.resolve_raw_input(episode_id)
+        if raw_input:
+            logger.info(f"恢复原始URL: {raw_input}")
         else:
-            # 早期失败的任务可能 pipeline 还没来得及写 source 表，
-            # 回退到 usage_log（paste 一定写过 raw_input）
-            async with aiosqlite.connect(DB_PATH) as db:
-                async with db.execute(
-                    "SELECT payload_json FROM usage_log "
-                    "WHERE episode_id = ? AND event_type = 'paste' "
-                    "ORDER BY ts DESC LIMIT 1",
-                    (episode_id,),
-                ) as cursor:
-                    row = await cursor.fetchone()
-                    if row:
-                        raw_input = row[0]
-                        logger.info(f"从 usage_log 恢复原始URL: {raw_input}")
-            if not raw_input:
-                raise HTTPException(
-                    status_code=400,
-                    detail="找不到原始URL，请提供raw_input参数"
-                )
+            raise HTTPException(
+                status_code=400,
+                detail="找不到原始URL，请提供raw_input参数"
+            )
 
     # 标记状态为处理中
     await EpisodeRepository.update_status(episode_id, EpisodeStatus.PENDING)

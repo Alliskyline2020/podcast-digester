@@ -701,6 +701,30 @@ class SourceRepository:
                 row = await cursor.fetchone()
                 return dict(row) if row else None
 
+    @staticmethod
+    async def resolve_raw_input(episode_id: str) -> Optional[str]:
+        """解析 episode 的原始输入（URL/路径），供 resume / 启动恢复重跑用。
+
+        回退顺序：
+        1. ``source`` 表的 ``raw_input``（pipeline 正常写入）；
+        2. ``usage_log`` 里最近一次 ``paste`` 事件的 ``payload_json``（提交时一定
+           先于 pipeline 写入，兜底「pipeline 还没来得及写 source 就崩」的早期失败）。
+
+        都没有则返回 None（调用方应提示用户手动重新提交）。
+        """
+        src = await SourceRepository.get_by_episode(episode_id)
+        if src and src.get("raw_input"):
+            return src["raw_input"]
+        async with _connect() as db:
+            async with db.execute(
+                "SELECT payload_json FROM usage_log "
+                "WHERE episode_id = ? AND event_type = 'paste' "
+                "ORDER BY ts DESC LIMIT 1",
+                (episode_id,),
+            ) as cursor:
+                row = await cursor.fetchone()
+                return row[0] if row else None
+
 
 # ==================== 同步方法（用于非异步上下文）====================
 

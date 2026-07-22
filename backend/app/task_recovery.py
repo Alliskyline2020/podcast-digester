@@ -103,11 +103,29 @@ async def _recover_single_task(episode_id: str, current_status: str) -> None:
         # 重新加载 transcript 并运行 LLM 流水线
         await _resume_llm_from_checkpoint(episode_id, job_data)
     else:
-        # 从头开始
-        logger.info(f"Task {episode_id} restarting from beginning")
+        # 没有 transcript checkpoint（ASR 未完成）→ 取原始输入后用 resume_episode 重跑。
+        # resume_episode 会按现有文件决定「从头下载+ASR」或「跳过已完成阶段」，
+        # 与手动「恢复」按钮同路径（已测）。raw_input 解析同 router 的回退顺序。
+        from .database import SourceRepository
+        from .pipeline import pipeline as audio_pipeline
+
+        raw_input = await SourceRepository.resolve_raw_input(episode_id)
+        if not raw_input:
+            await EpisodeRepository.update_status(
+                episode_id,
+                EpisodeStatus.FAILED,
+                error_msg="任务恢复失败: 找不到原始输入(URL/路径)，请在界面手动重新提交",
+            )
+            logger.warning(
+                f"Cannot restart task {episode_id}: no original input in source/usage_log"
+            )
+            return
+
+        logger.info(
+            f"Task {episode_id} restarting from beginning (raw_input recovered)"
+        )
         await EpisodeRepository.update_status(episode_id, EpisodeStatus.PENDING)
-        # 需要原始输入才能重新启动，这里暂时不处理
-        logger.warning(f"Cannot restart task {episode_id} without original input")
+        await audio_pipeline.resume_episode(episode_id, raw_input, on_progress=None)
 
 
 async def _resume_llm_from_checkpoint(episode_id: str, job_data: Optional[dict]) -> None:
