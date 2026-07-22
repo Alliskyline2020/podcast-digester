@@ -2,7 +2,7 @@
 # Python 3.11–3.13（3.14 暂不兼容：faster-whisper→av、pydantic-core、greenlet 缺预编译 wheel）
 
 # FastAPI and server
-fastapi==0.115.0
+fastapi==0.139.2
 uvicorn[standard]==0.30.0
 pydantic==2.8.0
 pydantic-settings==2.5.0
