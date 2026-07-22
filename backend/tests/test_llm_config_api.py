@@ -178,7 +178,7 @@ async def test_get_returns_editable_flag_and_glm_coding(cfg_env, monkeypatch):
     assert glm["base_url_editable"] is False
     assert glm["default_base_url"] == "https://open.bigmodel.cn/api/paas/v4"
     assert "base_urls" not in glm   # 多选下拉机制已移除
-    # 编码套件是独立 provider，固定 coding 端点
+    # coding plan 是独立 provider，固定 coding 端点
     coding = body["providers"]["glm-coding"]
     assert coding["default_base_url"] == "https://open.bigmodel.cn/api/coding/paas/v4"
     assert coding["base_url_editable"] is False

@@ -118,7 +118,7 @@
 |----------------|:--:|------------------------|----------|----------|------|
 | `deepseek` | 国内 | `openai_compatible` | `api.deepseek.com` | `deepseek-chat` | 推荐，性价比高 |
 | `glm` | 国内 | `openai_compatible` | `open.bigmodel.cn/api/paas/v4` | `glm-4-flash` | 智谱标准端点 |
-| `glm-coding` | 国内 | `openai_compatible` | `open.bigmodel.cn/api/coding/paas/v4` | *（拉取后选）* | 智谱编码套件专用端点 |
+| `glm-coding` | 国内 | `openai_compatible` | `open.bigmodel.cn/api/coding/paas/v4` | *（拉取后选）* | 智谱 coding plan 专用端点 |
 | `qwen` | 国内 | `openai_compatible` | `dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` | 通义千问 |
 | `doubao` | 国内 | `openai_compatible` | `ark.cn-beijing.volces.com/api/v3` | *（自填）* | 字节豆包，模型 id 实为 endpoint id |
 | `moonshot` | 国内 | `openai_compatible` | `api.moonshot.cn/v1` | `moonshot-v1-8k` | 月之暗面 Kimi |
@@ -127,7 +127,7 @@
 | `openai-compatible` | — | `openai_compatible` | 自填 | 自填 | 任意 OpenAI 兼容端点 |
 | `anthropic-compatible` | — | `anthropic_compatible` | 自填 | 自填 | 任意 Anthropic 兼容端点 |
 
-> **base_url 锁定**：命名厂商（上表前 8 个）端点固定为预设值、不可改；底部两个「兼容自定义端点」可自由填 `base_url`。不同端点 / 套餐已拆成独立 provider（如 GLM 标准端点 vs 编码套件端点）。
+> **base_url 锁定**：命名厂商（上表前 8 个）端点固定为预设值、不可改；底部两个「兼容自定义端点」可自由填 `base_url`。不同端点 / coding plan 已拆成独立 provider（如 GLM 标准端点 vs coding plan 端点）。
 
 ### 切换示例（`.env`）
 

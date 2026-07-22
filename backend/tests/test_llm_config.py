@@ -232,7 +232,7 @@ def test_providers_have_default_base_url():
 
 
 def test_glm_standard_and_coding_are_separate_providers():
-    # 标准 GLM 与编码套件拆成两个独立 provider，各自一个固定 url
+    # 标准 GLM 与 coding plan 拆成两个独立 provider，各自一个固定 url
     assert PROVIDERS["glm"]["default_base_url"] == "https://open.bigmodel.cn/api/paas/v4"
     assert "glm-coding" in PROVIDERS
     assert PROVIDERS["glm-coding"]["default_base_url"] == "https://open.bigmodel.cn/api/coding/paas/v4"

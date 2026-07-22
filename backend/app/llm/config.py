@@ -19,8 +19,8 @@ logger = __import__("logging").getLogger(__name__)
 
 # ==================== PROVIDERS 预设表 ====================
 # 每个条目：title(展示名) / provider_type(协议) / default_base_url / default_model / region
-# 设计：1 provider = 1 固定 base_url。不同端点/套餐拆成独立 provider
-# （如「智谱 GLM」标准端点 vs「智谱 GLM Coding Plan」编码套件端点）。
+# 设计：1 provider = 1 固定 base_url。不同端点 / coding plan 拆成独立 provider
+# （如「智谱 GLM」标准端点 vs「智谱 GLM Coding Plan」端点）。
 # default_base_url 留空 = 兼容自定义端点，base_url 可由用户自由填写。
 # region：国内/国际 用于设置页区域筛选；空 = 兼容自定义端点（地区无关，常驻底部）。
 # URL 与模型名以厂商官方文档为准（impl 时已核对）。
@@ -60,8 +60,8 @@ PROVIDERS: dict[str, dict] = {
     "glm-coding": {
         "title": "智谱 GLM Coding Plan",
         "provider_type": "openai_compatible",
-        "default_base_url": "https://open.bigmodel.cn/api/coding/paas/v4",   # 编码套件(Coding)专用端点
-        "default_model": "",   # 套餐模型需拉取后选择
+        "default_base_url": "https://open.bigmodel.cn/api/coding/paas/v4",   # coding plan 专用端点
+        "default_model": "",   # coding plan 模型需拉取后选择
         "region": "国内",
     },
     "qwen": {
