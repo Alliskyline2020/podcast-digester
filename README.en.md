@@ -12,7 +12,7 @@ A local-first, single-user tool built for high-density information consumers —
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white)
 ![Vue](https://img.shields.io/badge/Vue-3-42b883?logo=vuedotjs&logoColor=white)
 ![LLM](https://img.shields.io/badge/LLM-Multi--Provider-8A2BE2)
-![Tests](https://img.shields.io/badge/Tests-441%20passed-brightgreen)
+![CI](https://github.com/Alliskyline2020/podcast-digester/actions/workflows/ci.yml/badge.svg)
 ![License](https://img.shields.io/badge/License-MIT-blue)
 ![Status](https://img.shields.io/badge/Status-Personal%20·%20Active-orange)
 
@@ -311,14 +311,14 @@ podcast-digester/
 │   │   ├── services/            # subtitle alignment / polish / paragraph mapping
 │   │   ├── llm_pipeline/        # LLM distill tasks: chapter / summary / translate / highlight / insight
 │   │   └── utils/               # cookie / video-title / validation helpers
-│   ├── tests/                   # pytest (unit + integration, 441 cases)
+│   ├── tests/                   # pytest (unit + integration + smoke, 530+ cases)
 │   └── requirements.txt
 ├── frontend/
 │   ├── src/
 │   │   ├── views/               # LibraryView / PlayerView / SettingsView
 │   │   ├── components/          # UI components
 │   │   └── utils/               # stage progress / formatting
-│   └── tests/                   # Vitest (117 cases)
+│   └── tests/                   # Vitest (119 cases)
 ├── data/                        # SQLite + media/ep_* (gitignored)
 ├── docs/                        # transcript-correction guide
 └── start.sh / stop.sh           # one-click start/stop
@@ -326,14 +326,19 @@ podcast-digester/
 
 ## 🧪 Tests
 
+CI (GitHub Actions) runs backend pytest + frontend vitest + a frontend build smoke on every push.
+
 ```bash
-# Backend (441 cases; markers: unit / integration / api / database / llm)
+# Backend (530+ cases; markers: unit / integration / api / database / llm)
 cd backend && source venv/bin/activate && pytest tests
 
 # Unit tests only (fast, no network)
 pytest tests -m unit
 
-# Frontend (117 cases)
+# Coverage (~50% measured; CI gate fail-under=45)
+pytest --cov=app --cov-report=term-missing
+
+# Frontend (119 cases)
 cd frontend && npm test
 ```
 

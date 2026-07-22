@@ -12,7 +12,7 @@
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white)
 ![Vue](https://img.shields.io/badge/Vue-3-42b883?logo=vuedotjs&logoColor=white)
 ![LLM](https://img.shields.io/badge/LLM-多Provider-8A2BE2)
-![Tests](https://img.shields.io/badge/Tests-441%20passed-brightgreen)
+![CI](https://github.com/Alliskyline2020/podcast-digester/actions/workflows/ci.yml/badge.svg)
 ![License](https://img.shields.io/badge/License-MIT-blue)
 ![Status](https://img.shields.io/badge/Status-个人项目%20·%20活跃迭代-orange)
 
@@ -311,14 +311,14 @@ podcast-digester/
 │   │   ├── services/            # 字幕对齐 / 润色 / 段落映射等业务
 │   │   ├── llm_pipeline/        # LLM 蒸馏任务：分章 / 摘要 / 翻译 / 亮点 / 洞察
 │   │   └── utils/               # cookie / 视频标题 / 校验等工具
-│   ├── tests/                   # pytest（单元 + 集成，441 用例）
+│   ├── tests/                   # pytest（单元 + 集成 + 冒烟，530+ 用例）
 │   └── requirements.txt
 ├── frontend/
 │   ├── src/
 │   │   ├── views/               # LibraryView（节目库）/ PlayerView（播放器）/ SettingsView（设置）
 │   │   ├── components/          # UI 组件
 │   │   └── utils/               # 阶段进度 / 格式化等
-│   └── tests/                   # Vitest（117 用例）
+│   └── tests/                   # Vitest（119 用例）
 ├── data/                        # SQLite + media/ep_*（gitignore，不入库）
 ├── docs/                        # 字幕校正指南
 └── start.sh / stop.sh           # 一键启停
@@ -326,14 +326,19 @@ podcast-digester/
 
 ## 🧪 测试
 
+CI（GitHub Actions）会在每次推送时跑后端 pytest + 前端 vitest + 前端构建冒烟。
+
 ```bash
-# 后端（441 用例，含 unit / integration / api / database / llm 标记）
+# 后端（530+ 用例，含 unit / integration / api / database / llm 标记）
 cd backend && source venv/bin/activate && pytest tests
 
 # 只跑单元测试（快、无网络）
 pytest tests -m unit
 
-# 前端（117 用例）
+# 覆盖率（实测约 50%，CI 闸门 fail-under=45）
+pytest --cov=app --cov-report=term-missing
+
+# 前端（119 用例）
 cd frontend && npm test
 ```
 
