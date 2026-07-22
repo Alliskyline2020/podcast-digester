@@ -1,10 +1,9 @@
 """fresh 安装 init_db 是否创建派生数据表的回归测试。
 
 背景：outline/summaries/highlight/product_insights 四张派生表早期只存在于
-migrations/add_derived_data_tables.py，而该迁移从未接到任何启动路径；init_db()
-的建表脚本原本也不含这四张表。结果 fresh 克隆 → 启动 → 跑任意任务，一到
-DerivedDataRepository.set（持久化洞察/大纲/摘要/亮点）即
-'no such table: outline'，整集 failed。
+一次性迁移脚本里、从未接到任何启动路径，init_db() 的建表脚本原本也不含这四张表。
+结果 fresh 克隆 → 启动 → 跑任意任务，一到 DerivedDataRepository.set（持久化
+洞察/大纲/摘要/亮点）即 'no such table: outline'，整集 failed。
 
 本测试用全新空库跑 init_db，断言四张派生表 + 索引被建出，保证新用户开箱即用
 （这正是排查「全新用户是否同样中招」的回归闸门）。
@@ -50,7 +49,7 @@ async def test_init_db_creates_derived_data_tables(monkeypatch, tmp_path):
 async def test_init_db_creates_glossary_table(monkeypatch, tmp_path):
     """fresh 空 DB 跑 init_db → glossary 词库表必须存在（前端词库功能 + apply-glossary 依赖它）。
 
-    迁移 migrate_glossary_to_db.py 建表但从未接启动路径；新用户一点「词库」或
+    词库表早期只在一次性迁移脚本里建、从未接启动路径；新用户一点「词库」或
     apply-glossary 即 'no such table: glossary'。列须含 correct/wrong_list/
     created_at/updated_at（对齐 GlossaryRepository 的 SELECT/INSERT）。
     """

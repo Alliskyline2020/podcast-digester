@@ -18,6 +18,7 @@ import logging
 from functools import wraps
 
 from .config import DB_PATH
+from .migrations.runner import run_migrations
 
 logger = logging.getLogger(__name__)
 
@@ -150,10 +151,8 @@ async def init_db():
         );
 
         -- 派生数据表（outline/summaries/highlight/product_insights）
-        -- 早期只存在于 migrations/add_derived_data_tables.py，而该迁移从未接到
-        -- 启动路径；fresh 安装跑到 DerivedDataRepository.set 持久化洞察即
-        -- 'no such table: outline'。统一并入 init_db 建表（IF NOT EXISTS 幂等，
-        -- 与 _create_tables() 的 schema 逐字一致，列名对齐仓储层写入列）。
+        -- baseline schema 统一在 init_db 建表（IF NOT EXISTS 幂等，列名对齐仓储层
+        -- 写入列）；schema 演进走 migrations/runner.py 的 user_version runner。
         CREATE TABLE IF NOT EXISTS outline (
             episode_id TEXT PRIMARY KEY,
             entries_json TEXT NOT NULL,
@@ -183,9 +182,8 @@ async def init_db():
         );
 
         -- 词库表（glossary）：前端「词库」CRUD + apply-glossary 依赖。
-        -- migrate_glossary_to_db.py 建表但从未接启动路径；新用户一点词库功能即
-        -- 'no such table: glossary'。并入 init_db（IF NOT EXISTS 幂等，schema 与
-        -- 迁移脚本逐字一致，列对齐 GlossaryRepository 的 SELECT/INSERT）。
+        -- baseline schema 在 init_db 建表（IF NOT EXISTS 幂等，列对齐
+        -- GlossaryRepository 的 SELECT/INSERT）。
         CREATE TABLE IF NOT EXISTS glossary (
             correct TEXT PRIMARY KEY,
             wrong_list TEXT NOT NULL,
@@ -208,26 +206,10 @@ async def init_db():
 
         await db.commit()
 
-        # schema 演进：幂等补齐 episode 表历史缺失列（见 _ensure_episode_columns）
-        await _ensure_episode_columns(db)
-
-
-async def _ensure_episode_columns(db) -> None:
-    """幂等补齐 episode 表缺失列（title_zh / transcript）。
-
-    这两列在代码里被 pipeline 的 EpisodeRepository.update（title_zh）与
-    update_transcript（transcript）写入，但早期 init_db 的 CREATE TABLE 未
-    包含、也无迁移补列，导致历史库/fresh 库跑到写库即报
-    'no such column: title_zh' / 'transcript'。新库已由 CREATE TABLE 直接含；
-    此处为已有（缺列）库幂等补齐。
-    """
-    cur = await db.execute("PRAGMA table_info(episode)")
-    existing = {row[1] for row in await cur.fetchall()}
-    for col, decl in (("title_zh", "TEXT"), ("transcript", "TEXT")):
-        if col not in existing:
-            await db.execute(f"ALTER TABLE episode ADD COLUMN {col} {decl}")
-            logger.info(f"[migrate] episode: ADD COLUMN {col} {decl}")
-    await db.commit()
+        # schema 演进：按 user_version 跑未应用的迁移（幂等）。
+        # baseline（上面 CREATE TABLE IF NOT EXISTS）保证 fresh 库零迁移可用；
+        # runner 只补之后的演进（迁移定义见 app/migrations/runner.py）。
+        await run_migrations(db)
 
 
 def _connect() -> aiosqlite.Connection:

@@ -105,7 +105,9 @@ backend/data/
 # PID 文件
 .backend_pid
 .frontend_pid
+.worker_pid
 *.pid
+*_pid
 
 # 测试 fixtures 中可能生成的大文件
 *.mp3

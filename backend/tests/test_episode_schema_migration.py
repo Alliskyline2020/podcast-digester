@@ -1,15 +1,15 @@
-"""init_db schema 迁移回归测试。
+"""init_db schema 迁移回归测试（经 migrations runner）。
 
 背景：fresh 安装时 init_db 建表曾漏建 episode.title_zh / episode.transcript，
 而 pipeline 的 EpisodeRepository.update 与 update_transcript 会写入它们，
-导致任何任务跑到写库即 'no such column' 崩溃。_ensure_episode_columns 为
-历史/缺列库幂等补列；新库则由 CREATE TABLE 直接含。
+导致任何任务跑到写库即 'no such column' 崩溃。迁移 001（_m001_episode_columns，
+经 run_migrations 调度）为历史/缺列库幂等补列；新库则由 CREATE TABLE 直接含。
 """
 import sqlite3
 
 import aiosqlite
 
-from app.database import _ensure_episode_columns
+from app.migrations.runner import run_migrations
 
 
 def _make_legacy_episode_db(path) -> None:
@@ -44,35 +44,35 @@ def _episode_columns(path) -> list[str]:
     return cols
 
 
-async def test_ensure_episode_columns_adds_missing(tmp_path):
+async def test_run_migrations_adds_missing_columns(tmp_path):
     """缺列的历史库 → 补齐 title_zh + transcript。"""
     db_path = tmp_path / "legacy.db"
     _make_legacy_episode_db(db_path)
     assert "title_zh" not in _episode_columns(db_path)
 
     async with aiosqlite.connect(db_path) as db:
-        await _ensure_episode_columns(db)
+        await run_migrations(db)
 
     cols = _episode_columns(db_path)
     assert "title_zh" in cols
     assert "transcript" in cols
 
 
-async def test_ensure_episode_columns_idempotent(tmp_path):
-    """已有列的库 → 不报错、不重复添加（幂等）。"""
+async def test_run_migrations_idempotent(tmp_path):
+    """已应用过的库再跑 → user_version 闸门挡住重跑、列不重复（幂等）。"""
     db_path = tmp_path / "legacy.db"
     _make_legacy_episode_db(db_path)
 
     async with aiosqlite.connect(db_path) as db:
-        await _ensure_episode_columns(db)  # 第一次：补列
-        await _ensure_episode_columns(db)  # 第二次：幂等，不应报错
+        await run_migrations(db)  # 第一次：补列 + user_version=1
+        await run_migrations(db)  # 第二次：user_version 已=1，不重跑
 
     cols = _episode_columns(db_path)
     assert cols.count("title_zh") == 1
     assert cols.count("transcript") == 1
 
 
-async def test_ensure_episode_columns_preserves_data(tmp_path):
+async def test_run_migrations_preserves_data(tmp_path):
     """补列不破坏已有数据。"""
     db_path = tmp_path / "legacy.db"
     _make_legacy_episode_db(db_path)
@@ -85,7 +85,7 @@ async def test_ensure_episode_columns_preserves_data(tmp_path):
     conn.close()
 
     async with aiosqlite.connect(db_path) as db:
-        await _ensure_episode_columns(db)
+        await run_migrations(db)
 
     conn = sqlite3.connect(db_path)
     row = conn.execute(
