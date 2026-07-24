@@ -208,7 +208,7 @@ class Worker:
 
         注意：此方法不返回，直到 stop() 被调用
         """
-        from app.database import EpisodeRepository, UsageLogRepository
+        from app.database import EpisodeRepository, SourceRepository
         from app.ingest import pipeline
 
         logger.info("Worker started")
@@ -236,29 +236,31 @@ class Worker:
                         episode_id = episode["id"]
                         logger.info(f"Processing episode: {episode_id}")
 
-                        # 获取原始输入（从 usage_log 中获取）
-                        logs = await UsageLogRepository.get_by_episode(episode_id, limit=1)
+                        # 取原始输入：与 task_recovery / 手动「恢复」按钮同路径
+                        # （source.raw_input → usage_log paste 兜底）。旧的直接读
+                        # usage_log.payload_json 既不走 source 表、也不限 event_type，
+                        # 早期失败（pipeline 还没写 source 就崩）或非 paste 事件会取错源。
+                        raw_input = await SourceRepository.resolve_raw_input(episode_id)
 
-                        if logs:
-                            raw_input = logs[0]["payload_json"]
-                            logger.info(f"Starting ingest for {episode_id} with input: {raw_input}")
+                        if not raw_input:
+                            logger.warning(f"No raw_input found for episode {episode_id}, skipping")
+                            continue
 
-                            try:
-                                await pipeline.run_ingest(
-                                    episode_id=episode_id,
-                                    raw_input=raw_input,
-                                    on_progress=None
-                                )
-                                logger.info(f"Successfully processed episode: {episode_id}")
-                            except Exception as e:
-                                logger.error(f"Failed to process episode {episode_id}: {e}", exc_info=True)
-                                await EpisodeRepository.update_status(
-                                    episode_id,
-                                    "failed",
-                                    error_msg=str(e)
-                                )
-                        else:
-                            logger.warning(f"No usage log found for episode {episode_id}")
+                        logger.info(f"Starting ingest for {episode_id} with input: {raw_input}")
+                        try:
+                            await pipeline.run_ingest(
+                                episode_id=episode_id,
+                                raw_input=raw_input,
+                                on_progress=None
+                            )
+                            logger.info(f"Successfully processed episode: {episode_id}")
+                        except Exception as e:
+                            logger.error(f"Failed to process episode {episode_id}: {e}", exc_info=True)
+                            await EpisodeRepository.update_status(
+                                episode_id,
+                                "failed",
+                                error_msg=str(e)
+                            )
 
                 # 等待下一次轮询
                 await asyncio.sleep(self.poll_interval)

@@ -79,7 +79,14 @@ class Settings:
 
         # ==================== Worker 配置 ====================
         self.worker_poll_interval_seconds = int(os.getenv("PODCAST_DIGESTER_WORKER_POLL_INTERVAL", "5"))
-        self.worker_lock_file = Path(os.getenv("PODCAST_DIGESTER_WORKER_LOCK", "/tmp/podcast_worker.pid"))
+        # Worker 单例锁文件：默认放项目根 .worker_pid（与 .backend_pid/.frontend_pid
+        # 同级、已 gitignore）。历史上默认是全局 /tmp/podcast_worker.pid，会导致
+        # 同机多实例/多项目共用一把锁互相挤掉——故改为项目内，由 PODCAST_DIGESTER_WORKER_LOCK 覆盖。
+        _project_root = Path(__file__).parent.parent.parent
+        self.worker_lock_file = Path(os.getenv(
+            "PODCAST_DIGESTER_WORKER_LOCK",
+            str(_project_root / ".worker_pid"),
+        ))
         self.worker_process_cleanup_patterns = [
             "whisper",
             "faster-whisper",
