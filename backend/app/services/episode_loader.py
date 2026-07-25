@@ -173,6 +173,28 @@ async def load_progress_fast(episode_id: str) -> Optional[dict]:
 
 # ==================== EpisodeBundle 组装 ====================
 
+def _build_summaries(items: list) -> list:
+    """把 summaries 原始 dict 列表构造成 ChapterSummary，跳过校验失败的坏条目。
+
+    与 outline 兜底同一架构缺陷的修复（fail-late/fail-big → skip-and-warn）：
+    旧实现 `[ChapterSummary(**s) for s in items]` 是 all-or-nothing，而
+    ChapterSummary 比 OutlineEntry 更严(content_zh min_length=50、key_points_zh
+    min_items=2)。LLM 产 1 条 <50 字摘要或 <2 个 key_points 就会让整组 summaries
+    在校验处整体抛 → loader 兜空 → 前端「章内 bullets」(key_points_zh) 全消失。
+    跳过坏条目、保留其余，并对每条坏数据落 warning 以便定位。
+    """
+    built = []
+    for s in items:
+        try:
+            built.append(ChapterSummary(**s))
+        except Exception as item_err:  # noqa: BLE001 — 单坏条目不得砸掉整组
+            logger.warning(
+                f"[Load Bundle] 跳过格式异常的 summary 条目 "
+                f"(chapter_id={s.get('chapter_id')!r}): {item_err}"
+            )
+    return built
+
+
 def _clean_segment_text(text: str) -> str:
     """清理 segment 文本：解码 HTML 实体、移除标签、合并空格。"""
     if not text:
@@ -283,7 +305,19 @@ async def load_episode_bundle(episode_id: str) -> EpisodeBundle:
                 entries_list = entries_data["entries"]
             else:
                 entries_list = entries_data if isinstance(entries_data, list) else []
-            outline_data["entries"] = [OutlineEntry(**e) for e in entries_list]
+            # 单条坏数据（如末章 end_ms 缺失）不得让整个 outline 归 None——否则前端
+            # 章节列表 + 章内 key_points 全消失。跳过坏条目、保留其余（生成端
+            # _stamp_chapter_timings 已修末章 off-by-one，此处为历史/异常数据的兜底）。
+            built = []
+            for e in entries_list:
+                try:
+                    built.append(OutlineEntry(**e))
+                except Exception as item_err:  # noqa: BLE001 — 单坏条目不得砸掉整章
+                    logger.warning(
+                        f"[Load Bundle] 跳过格式异常的 outline 条目 "
+                        f"(index={e.get('index')!r}, title={e.get('title_zh')!r}): {item_err}"
+                    )
+            outline_data["entries"] = built
             outline = Outline(**outline_data)
     except Exception as e:
         logger.debug(f"[Load Bundle] outline DB load raised, trying filesystem: {e}")
@@ -303,7 +337,7 @@ async def load_episode_bundle(episode_id: str) -> EpisodeBundle:
         summaries_data = await SummariesRepository.get(episode_id)
         if summaries_data and summaries_data.get("summaries_json"):
             summaries_list = json.loads(summaries_data["summaries_json"])
-            summaries = [ChapterSummary(**s) for s in summaries_list]
+            summaries = _build_summaries(summaries_list)
     except Exception as e:
         logger.debug(f"[Load Bundle] summaries DB load raised, trying filesystem: {e}")
 
@@ -311,7 +345,7 @@ async def load_episode_bundle(episode_id: str) -> EpisodeBundle:
         summaries_file = deps.data_dir / "media" / episode_id / "summaries.json"
         if summaries_file.exists():
             def prepare_summaries(data):
-                return [ChapterSummary(**s) for s in data]
+                return _build_summaries(data)
             summaries = load_json_with_callback(summaries_file, prepare_summaries) or []
 
     # 加载 highlight - 优先数据库；DB 空或异常都回退到磁盘 checkpoint

@@ -54,6 +54,95 @@ async def test_split_into_chapters_injects_positional_index(monkeypatch):
     assert [c.get("index") for c in chapters] == [0, 1, 2]
 
 
+# ===== 末章 end_ms off-by-one（章节分段整体消失的根因）=====
+#
+# 回归（systematic-debugging）：split_into_chapters 用 `if end_id < len(segments)`
+# 守卫 end_ms 写入。末章的 end_segment_id 常为 len(segments)（LLM 用排他边界表示
+# 「直到结尾」，ep_1784870551970 实测：356 段、末章 end_segment_id=356）→ `356 < 356`
+# 为 False → end_ms 不写入 → OutlineEntry(end_ms 必填) 校验失败 → loader 的列表推导
+# 整体抛错 → outline 归 None → 前端 chapters=[] → 章节列表 + 章内 key_points 全消失。
+# 修复：抽出 _stamp_chapter_timings，end_id 越界时钳到末段取 end_ms。
+
+@pytest.mark.unit
+def test_stamp_chapter_timings_clamps_past_end_boundary():
+    """末章 end_segment_id == len(segments)（排他越界边界）时必须钳到末段，
+    写入 end_ms，而非跳过（跳过会让 OutlineEntry 校验失败、整章归 None）。"""
+    from app.llm_pipeline import llm_split
+    from app.models import Segment
+
+    # 5 段，索引 0..4
+    segs = [
+        Segment(id=i, start_ms=i * 1000, end_ms=(i + 1) * 1000, text_original=f"s{i}")
+        for i in range(5)
+    ]
+    chapters = [
+        # 内章节：合法 end_id
+        {"title_zh": "一", "start_segment_id": 0, "end_segment_id": 2},
+        # 末章：end_segment_id == len(segments) （排他越界边界，ep_1784870551970 实况）
+        {"title_zh": "末", "start_segment_id": 2, "end_segment_id": 5},
+    ]
+
+    llm_split._stamp_chapter_timings(chapters, segs)
+
+    # 内章节不受影响：end_ms = segs[2].end_ms
+    assert chapters[0]["start_ms"] == 0
+    assert chapters[0]["end_ms"] == 3000
+    # 末章越界边界被钳到末段 segs[4]：end_ms 必须被写入（回归核心）
+    assert chapters[1]["start_ms"] == 2000
+    assert chapters[1]["end_ms"] == 5000, "末章 end_ms 不能缺，否则 OutlineEntry 校验炸、整 outline 归 None"
+
+
+@pytest.mark.unit
+def test_stamp_chapter_timings_clamps_negative_and_huge_end_id():
+    """极端 end_id 也要钳到合法区间，不得缺 end_ms、不得越界取 segments[idx]。"""
+    from app.llm_pipeline import llm_split
+    from app.models import Segment
+
+    segs = [
+        Segment(id=i, start_ms=i * 1000, end_ms=(i + 1) * 1000, text_original=f"s{i}")
+        for i in range(3)
+    ]
+    chapters = [
+        {"title_zh": "A", "start_segment_id": 0, "end_segment_id": 99},   # 远超长
+        {"title_zh": "B", "start_segment_id": 0, "end_segment_id": -1},    # 负数
+    ]
+    llm_split._stamp_chapter_timings(chapters, segs)
+
+    assert chapters[0]["end_ms"] == 3000   # 钳到末段 segs[2].end_ms
+    # 负 end_id 钳后仍 < 0 → 不写 end_ms（由 loader 容错兜底），但绝不能取 segs[-1]
+    assert "end_ms" not in chapters[1] or chapters[1]["end_ms"] != 1000
+
+
+@pytest.mark.unit
+async def test_split_into_chapters_last_chapter_keeps_end_ms(monkeypatch):
+    """端到端：fake LLM 给末章返回 end_segment_id=len(segments)，split_into_chapters
+    必须为每章都写入 end_ms（旧行为会让末章丢 end_ms）。"""
+    from app.llm_pipeline import llm_split
+    from app.models import Segment, Transcript
+
+    async def fake_chat_json(*args, **kwargs):
+        return {
+            "chapters": [
+                {"title_zh": "一", "start_segment_id": 0, "end_segment_id": 1},
+                # 末章 end_segment_id == 段数（排他越界）
+                {"title_zh": "末", "start_segment_id": 1, "end_segment_id": 5},
+            ]
+        }
+
+    monkeypatch.setattr(llm_split, "chat_json", fake_chat_json)
+    segs = [
+        Segment(id=i, start_ms=i * 1000, end_ms=(i + 1) * 1000, text_original=f"seg {i}")
+        for i in range(5)
+    ]
+    transcript = Transcript(episode_id="ep_endms", language="zh", segments=segs)
+
+    chapters = await llm_split.split_into_chapters(transcript)
+
+    assert len(chapters) == 2
+    assert all("end_ms" in c for c in chapters), "每章都必须有 end_ms（末章不能丢）"
+    assert chapters[-1]["end_ms"] == 5000   # 末段 segs[4].end_ms
+
+
 @pytest.mark.unit
 async def test_load_intermediate_results_tolerates_outline_missing_index(temp_data_dir):
     """_load_intermediate_results (resume path) must not crash on an outline.json

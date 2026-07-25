@@ -89,14 +89,8 @@ async def split_into_chapters(
 
         chapters = result.get("chapters", [])
 
-        # 添加时间戳信息
-        for ch in chapters:
-            start_id = ch["start_segment_id"]
-            end_id = ch["end_segment_id"]
-            if start_id < len(segments):
-                ch["start_ms"] = segments[start_id].start_ms
-            if end_id < len(segments):
-                ch["end_ms"] = segments[end_id].end_ms
+        # 添加时间戳信息（末章排他边界由 _stamp_chapter_timings 钳到末段，避免 end_ms 缺失）
+        _stamp_chapter_timings(chapters, segments)
 
         logger.info(f"Chapter split completed: {len(chapters)} chapters")
 
@@ -177,14 +171,8 @@ async def _split_with_windowing(
     for window_chapters in results:
         all_chapters.extend(window_chapters)
 
-    # 为所有章节添加时间戳信息
-    for ch in all_chapters:
-        start_id = ch["start_segment_id"]
-        end_id = ch["end_segment_id"]
-        if start_id < len(segments):
-            ch["start_ms"] = segments[start_id].start_ms
-        if end_id < len(segments):
-            ch["end_ms"] = segments[end_id].end_ms
+    # 为所有章节添加时间戳信息（末章排他边界由 _stamp_chapter_timings 钳到末段）
+    _stamp_chapter_timings(all_chapters, segments)
 
     # 去重合并相邻的相似章节
     merged_chapters = _merge_adjacent_chapters(all_chapters)
@@ -221,6 +209,28 @@ def _merge_adjacent_chapters(chapters: List[Dict]) -> List[Dict]:
             merged.append(ch)
 
     return merged
+
+
+def _stamp_chapter_timings(chapters: List[Dict[str, Any]], segments: List) -> None:
+    """把 segment 索引翻译成毫秒时间戳，就地写入每个 chapter dict 的 start_ms / end_ms。
+
+    修末章 off-by-one（章节分段整体消失的根因）：LLM 常用「排他边界」表示末章结束——
+    end_segment_id = len(segments)（ep_1784870551970 实测：356 段、末章 end_segment_id=356）。
+    旧守卫 `end_id < len(segments)` 对此判 False → end_ms 不写入 → OutlineEntry(end_ms 必填)
+    校验失败 → loader 列表推导整体抛错 → outline 归 None → 前端章节列表 + 章内 key_points 全消失。
+    故 end_id 越界时钳到末段取 end_ms；负值不写（交 loader 容错兜底），绝不取 segments[-1]。
+    """
+    n = len(segments)
+    last_idx = n - 1
+    for ch in chapters:
+        start_id = ch.get("start_segment_id")
+        end_id = ch.get("end_segment_id")
+        if isinstance(start_id, int) and 0 <= start_id < n:
+            ch["start_ms"] = segments[start_id].start_ms
+        if isinstance(end_id, int):
+            clamped = min(end_id, last_idx)   # 末章排他边界 len(segments) → 钳到末段
+            if clamped >= 0:
+                ch["end_ms"] = segments[clamped].end_ms
 
 
 def _topics_similar(title1: str, title2: str) -> bool:

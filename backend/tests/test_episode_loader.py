@@ -151,3 +151,99 @@ async def test_loader_prefers_db_when_derived_rows_exist(tmp_path, monkeypatch):
 
     assert bundle.outline is not None
     assert len(bundle.outline.entries) == 2, "DB 命中时应取 DB 的 2 章, 不回退磁盘的 1 章"
+
+
+async def test_loader_outline_skips_malformed_entry_keeps_rest(tmp_path, monkeypatch):
+    """回归（systematic-debugging）：outline 某一条目缺必填字段(如末章 end_ms 缺失)
+    不能让整个 outline 归 None——否则前端章节列表 + 章内 key_points 全消失。
+    loader 必须跳过坏条目、保留其余，而不是 all-or-nothing。
+
+    根因：ep_1784870551970 末章 end_segment_id=356(=段数, 排他越界)，生成端旧守卫
+    `end_id < len(segments)` 漏写 end_ms → OutlineEntry(end_ms 必填)校验炸 →
+    loader 列表推导 `[OutlineEntry(**e) for e in entries]` 整体抛 → outline=None。
+    生成端已修(_stamp_chapter_timings 钳末段)；此处为 defense-in-depth：即便历史/
+    异常数据里仍有坏条目，详情页也不该整章全空。
+    """
+    import app.services.episode_loader as L
+    monkeypatch.setattr(app.deps, "data_dir", tmp_path)   # 不落 checkpoint 文件，强制走 DB
+    monkeypatch.setattr(
+        L.EpisodeRepository, "get_by_id",
+        AsyncMock(return_value=_episode_row()),
+    )
+    monkeypatch.setattr(
+        L.SourceRepository, "get_by_episode",
+        AsyncMock(return_value=None),
+    )
+    # 3 条：首尾合法、中间一条缺 end_ms（坏条目）
+    monkeypatch.setattr(L.OutlineRepository, "get", AsyncMock(return_value={
+        "entries": [
+            {"index": 0, "title_zh": "好1", "start_ms": 0, "end_ms": 1000,
+             "start_segment_id": 0, "end_segment_id": 1},
+            {"index": 1, "title_zh": "坏", "start_ms": 1000,
+             "start_segment_id": 1, "end_segment_id": 2},   # 缺 end_ms
+            {"index": 2, "title_zh": "好2", "start_ms": 2000, "end_ms": 3000,
+             "start_segment_id": 2, "end_segment_id": 3},
+        ],
+    }))
+    monkeypatch.setattr(L.SummariesRepository, "get", AsyncMock(return_value=None))
+    monkeypatch.setattr(L.HighlightRepository, "get", AsyncMock(return_value=None))
+    monkeypatch.setattr(L.ProductInsightsRepository, "get", AsyncMock(return_value=None))
+
+    bundle = await load_episode_bundle(EP_ID)
+
+    # 不能因 1 条坏数据把整章砸没——必须保留 2 条好的
+    assert bundle.outline is not None, "单条坏条目不得让整个 outline 归 None"
+    titles = [e.title_zh for e in bundle.outline.entries]
+    assert "坏" not in titles, "缺 end_ms 的坏条目应被跳过"
+    assert titles == ["好1", "好2"], f"应保留两条好条目，实际: {titles}"
+
+
+async def test_loader_summaries_skips_malformed_entry_keeps_rest(tmp_path, monkeypatch):
+    """回归（systematic-debugging，outline 同类缺陷）：summaries loader 旧实现
+    `[ChapterSummary(**s) for s in summaries_list]` 是 all-or-nothing。而 ChapterSummary
+    比 OutlineEntry 更严——content_zh min_length=50、key_points_zh min_items=2。LLM 只要
+    产 1 条 <50 字摘要或 <2 个 key_points，整组 summaries 就在校验处整体抛 → loader 兜空 →
+    前端「章内 bullets」(key_points_zh 渲染在每章行内) 全消失——与 outline 末章 end_ms
+    同一个 fail-late/fail-big 架构缺陷。
+
+    修法与 outline 兜底对齐：跳过坏条目、保留其余。
+    """
+    import json as _json
+    import app.services.episode_loader as L
+
+    GOOD = (  # content_zh >=50 字、key_points_zh >=2 项：合法
+        "本章深入介绍了节目的核心主题与嘉宾背景，全面覆盖了主要讨论线索、"
+        "关键论点以及最终得出的重要结论，帮助听众快速把握全貌。"
+    )
+    summaries_payload = _json.dumps([
+        {"chapter_id": "ch0", "content_zh": GOOD,
+         "key_points_zh": ["要点一", "要点二"], "cited_segment_ids": [0, 1]},
+        # 坏条目：content_zh 远短于 min_length=50
+        {"chapter_id": "ch1", "content_zh": "太短了",
+         "key_points_zh": ["x"], "cited_segment_ids": [2]},
+        {"chapter_id": "ch2", "content_zh": GOOD,
+         "key_points_zh": ["要点三", "要点四"], "cited_segment_ids": [3, 4]},
+    ], ensure_ascii=False)
+
+    monkeypatch.setattr(app.deps, "data_dir", tmp_path)   # 不落 checkpoint，强制走 DB
+    monkeypatch.setattr(
+        L.EpisodeRepository, "get_by_id",
+        AsyncMock(return_value=_episode_row()),
+    )
+    monkeypatch.setattr(
+        L.SourceRepository, "get_by_episode",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(L.OutlineRepository, "get", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        L.SummariesRepository, "get",
+        AsyncMock(return_value={"summaries_json": summaries_payload}),
+    )
+    monkeypatch.setattr(L.HighlightRepository, "get", AsyncMock(return_value=None))
+    monkeypatch.setattr(L.ProductInsightsRepository, "get", AsyncMock(return_value=None))
+
+    bundle = await load_episode_bundle(EP_ID)
+
+    # 单条坏摘要不得把整组砸没——必须保留 2 条好的
+    ids = [s.chapter_id for s in bundle.chapter_summaries]
+    assert ids == ["ch0", "ch2"], f"应跳过坏条目 ch1、保留 ch0/ch2，实际: {ids}"
