@@ -205,14 +205,17 @@ class AudioProcessPipeline:
 
         # 下载带进度回调
         def download_progress(s, p):
-            stages[-1]["progress"] = p
+            # 仅接受真正属于当前（下载）阶段的进度事件；parser 复用本回调发的
+            # "subtitle" 等异类事件必须忽略，否则会砸回 download 进度 → overall 归零。
+            if not self._apply_download_progress(stages, s, p):
+                return
             if on_progress:
                 on_progress("download", p)
             # yt-dlp 进度回调是同步的；DB 写库 fire-and-forget，
             # 否则 async 函数被同步调用会变成 never-awaited 协程
             asyncio.create_task(IngestJobRepository.update_stages(
                 episode_id,
-                [self._format_stage(s) for s in stages],
+                [self._format_stage(st) for st in stages],
                 stages[-1]["id"],
             ))
 
@@ -409,6 +412,20 @@ class AudioProcessPipeline:
             if s["id"] == stage_id:
                 s["progress"] = progress
                 break
+
+    def _apply_download_progress(self, stages: list, stage_id: str, progress: float) -> bool:
+        """应用经 download 回调到达的进度事件。
+
+        仅当 ``stage_id`` 匹配当前（最后一个）阶段时才更新并返回 True。
+        异类 stage_id（如 YouTubeParser 下载完成后复用本回调发出的
+        ``on_progress("subtitle", 0.0)``）必须忽略——否则已完成的 download
+        阶段 progress 会被砸回 0.0，calculate_overall_progress("download", 0.0)
+        随之归零（用户可见“完成下载后进度突然变 0%”）。
+        """
+        if not stages or stage_id != stages[-1]["id"]:
+            return False
+        stages[-1]["progress"] = progress
+        return True
 
     def _make_db_progress_cb(self, stages: list, stage_id: str, episode_id: str):
         """构建同步进度回调:更新内存阶段进度,并 fire-and-forget 写库。
@@ -874,12 +891,13 @@ class AudioProcessPipeline:
             media_dir.mkdir(parents=True, exist_ok=True)
 
             def download_progress(s, p):
-                stages[-1]["progress"] = p
+                if not self._apply_download_progress(stages, s, p):
+                    return
                 if on_progress:
                     on_progress("download", p)
                 asyncio.create_task(IngestJobRepository.update_stages(
                     episode_id,
-                    [self._format_stage(s) for s in stages],
+                    [self._format_stage(st) for st in stages],
                     stages[-1]["id"],
                 ))
 

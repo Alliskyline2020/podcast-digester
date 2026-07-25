@@ -197,6 +197,41 @@ async def test_summarize_emits_chapter_counts(monkeypatch):
     assert sorted(c[1] for c in calls) == [1, 2, 3, 4]
 
 
+# ===== download_progress 必须按 stage_id 过滤 =====
+#
+# 回归（systematic-debugging）：download_progress 闭包无视传入的 stage_id，
+# 永远写 stages[-1]["progress"]。YouTubeParser 下载完成后复用该回调发
+# on_progress("subtitle", 0.0) → 已完成的 download 阶段 progress 从 1.0 被
+# 砸回 0.0 → calculate_overall_progress("download", 0.0) = 0%
+# （用户可见“完成下载后进度突然归零”）。修复：抽出 _apply_download_progress，
+# 仅当 stage_id 匹配当前（最后一个）阶段才更新；否则忽略，避免污染。
+
+
+@pytest.mark.unit
+async def test_apply_download_progress_updates_when_stage_matches(temp_data_dir):
+    pipe = AudioProcessPipeline(temp_data_dir)
+    stages = [_stage("download", progress=0.2)]
+    applied = pipe._apply_download_progress(stages, "download", 0.8)
+    assert applied is True
+    assert stages[0]["progress"] == 0.8
+
+
+@pytest.mark.unit
+async def test_apply_download_progress_ignores_foreign_stage_id(temp_data_dir):
+    """parser 发的 "subtitle" 事件绝不能砸回 download 进度（回归核心）。"""
+    pipe = AudioProcessPipeline(temp_data_dir)
+    stages = [_stage("download", progress=1.0)]
+    applied = pipe._apply_download_progress(stages, "subtitle", 0.0)
+    assert applied is False
+    assert stages[0]["progress"] == 1.0  # 未被砸回 0.0
+
+
+@pytest.mark.unit
+async def test_apply_download_progress_empty_stages_safe(temp_data_dir):
+    pipe = AudioProcessPipeline(temp_data_dir)
+    assert pipe._apply_download_progress([], "download", 0.5) is False
+
+
 # ===== load_progress_fast: overall_progress must be monotonic & correct =====
 #
 # Regression (systematic-debugging): load_progress_fast decided a stage was

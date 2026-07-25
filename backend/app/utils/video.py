@@ -2,6 +2,7 @@
 视频标题获取工具
 统一各平台的视频标题获取逻辑
 """
+import asyncio
 import logging
 import subprocess
 from typing import Optional
@@ -15,22 +16,28 @@ logger = logging.getLogger(__name__)
 
 # 超时配置（秒）
 YTDLP_TIMEOUT = 30
+# 瞬时失败重试（YouTube 下载完成后偶发限流/429；标题只在下载时取一次，
+# 静默回退会留下永久占位标题，故失败时重试并留 warning 便于排查）。
+TITLE_MAX_ATTEMPTS = 3
+TITLE_RETRY_BACKOFF = 1.5
 
 
 async def get_video_title(
     url: str,
     fallback_name: str = "视频",
     platform: Optional[str] = None,
+    max_attempts: int = TITLE_MAX_ATTEMPTS,
 ) -> str:
     """
-    使用 yt-dlp 获取视频标题
+    使用 yt-dlp 获取视频标题（瞬时失败重试，全部失败留 warning）。
 
     Args:
         url: 视频 URL
-        fallback_name: 获取失败时的回退名称
+        fallback_name: 全部重试失败时的回退名称
         platform: 平台标识 (bilibili/youtube/...)。鉴权平台会注入 cookies，
             与 run_ytdlp 的下载路径保持一致——否则 bilibili 等反爬平台会在
             --get-title 处拿到 412，退回占位标题。
+        max_attempts: 最大尝试次数（含首次）。瞬时失败会指数退避重试。
 
     Returns:
         视频标题
@@ -55,21 +62,35 @@ async def get_video_title(
                     f"大概率在 412 反爬处退回占位标题。"
                 )
 
-    try:
-        safe_url = sanitize_url(url)
-        result = subprocess.run(
-            cmd + [safe_url],
-            capture_output=True,
-            text=True,
-            timeout=YTDLP_TIMEOUT,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip()
-    except subprocess.TimeoutExpired:
-        logger.warning(f"Timeout getting title for {url}")
-    except Exception as e:
-        logger.warning(f"Failed to get title for {url}: {e}")
+    safe_url = sanitize_url(url)
+    last_err = ""
+    for attempt in range(1, max_attempts + 1):
+        try:
+            result = subprocess.run(
+                cmd + [safe_url],
+                capture_output=True,
+                text=True,
+                timeout=YTDLP_TIMEOUT,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout.strip()
+            last_err = (
+                f"exit={result.returncode} "
+                f"stderr={(result.stderr or '').strip()[:200]}"
+            )
+        except subprocess.TimeoutExpired:
+            last_err = f"timeout after {YTDLP_TIMEOUT}s"
+        except Exception as e:  # noqa: BLE001 — 守住任何异常，回退占位标题
+            last_err = f"{type(e).__name__}: {e}"
 
+        # 还有下一次尝试 → 退避后重试
+        if attempt < max_attempts:
+            await asyncio.sleep(TITLE_RETRY_BACKOFF * attempt)
+
+    logger.warning(
+        f"get_video_title 全部 {max_attempts} 次尝试失败 "
+        f"(platform={platform}, url={url}): {last_err}；回退占位标题。"
+    )
     return fallback_name
 
 
