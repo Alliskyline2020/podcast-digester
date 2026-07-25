@@ -54,9 +54,11 @@ class YouTubeParser(BaseSourceParser):
 
         transcript = await fetch_youtube_subtitles(url)
 
-        # 从 YouTube 获取标题
+        # 从 YouTube 获取标题（传 platform 与下载路径一致）
         video_id = self._extract_video_id(url)
-        title = await get_video_title(url, fallback_name=f"YouTube: {video_id}")
+        title = await get_video_title(
+            url, fallback_name=f"YouTube: {video_id}", platform="youtube"
+        )
 
         result = ParseResult(
             title=title,

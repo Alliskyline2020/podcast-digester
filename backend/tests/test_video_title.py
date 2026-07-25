@@ -44,6 +44,33 @@ def capture_run(monkeypatch):
     return state
 
 
+# --- 使用 venv yt-dlp（与 run_ytdlp 下载路径一致）---
+#
+# 真实事故：get_video_title 原用 ["yt-dlp"] 走系统 PATH，命中系统旧版
+# yt-dlp (2025.10.14) + macOS LibreSSL，YouTube --get-title 全失败；
+# 而下载用 [sys.executable, "-m", "yt_dlp"] 走 venv 新版 (2026.07.04) 成功。
+# 这种不对称导致"下载成功但标题是占位符"。统一为 venv yt-dlp。
+
+
+@pytest.mark.asyncio
+async def test_uses_venv_ytdlp_not_system_path(capture_run, monkeypatch):
+    """必须用 venv 的 yt_dlp 模块，不能走系统 PATH 的旧 yt-dlp。"""
+    capture_run["result"] = _FakeCompleted(returncode=0, stdout="标题\n")
+
+    await get_video_title("https://www.youtube.com/watch?v=abc123", fallback_name="占位")
+
+    cmd = capture_run["cmd"]
+    # 前两项必须是 [sys.executable, "-m", "yt_dlp"] —— 与 ytdlp_runner.YTDLP_CMD 一致
+    import sys
+    assert cmd[0] == sys.executable, (
+        f"必须用 venv python ({sys.executable})，实际首项: {cmd[0]!r}"
+    )
+    assert cmd[1] == "-m"
+    assert cmd[2] == "yt_dlp"
+    # 不能用裸 "yt-dlp"（会命中系统旧版）
+    assert "yt-dlp" not in cmd, "禁止用系统 PATH 的 yt-dlp（旧版 + LibreSSL 会失败）"
+
+
 # --- 鉴权平台：注入浏览器 cookies（优先）---
 
 

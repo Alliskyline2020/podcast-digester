@@ -5,6 +5,7 @@
 import asyncio
 import logging
 import subprocess
+import sys
 from typing import Optional
 
 from .validation import sanitize_url
@@ -20,6 +21,12 @@ YTDLP_TIMEOUT = 30
 # 静默回退会留下永久占位标题，故失败时重试并留 warning 便于排查）。
 TITLE_MAX_ATTEMPTS = 3
 TITLE_RETRY_BACKOFF = 1.5
+
+# 用当前 Python 环境（venv）的 yt_dlp 模块，与 sources.ytdlp_runner.YTDLP_CMD 一致。
+# 真实事故：原用 ["yt-dlp"] 走系统 PATH，命中系统旧版 yt-dlp (2025.10.14) +
+# macOS LibreSSL 2.8.3，YouTube --get-title 全部失败（exit=1），退回占位标题；
+# 而下载路径用 venv 新版 (2026.07.04) 成功 → "下载成功但标题是 YouTube: <id>" 占位。
+YT_DLP_CMD = [sys.executable, "-m", "yt_dlp"]
 
 
 async def get_video_title(
@@ -42,7 +49,7 @@ async def get_video_title(
     Returns:
         视频标题
     """
-    cmd = ["yt-dlp", "--get-title", "--no-warnings"]
+    cmd = YT_DLP_CMD + ["--get-title", "--no-warnings"]
 
     # 鉴权平台注入 cookies（反爬平台需要：bilibili 等）
     # 与 run_ytdlp 同一套策略：浏览器优先（多域名活跃会话），cookies.txt 兜底。
