@@ -217,6 +217,7 @@ def save_episode_bundle(
     media_dir = data_dir / "media" / episode_id
     writer = AtomicWriter(episode_id, media_dir)
 
+    # 阶段 1：写文件 + commit。失败 → 回滚文件 + 标 failed + raise（原行为）。
     try:
         # 写入所有数据到临时文件
         if transcript:
@@ -233,16 +234,37 @@ def save_episode_bundle(
 
         # 原子性提交
         writer.commit()
-
-        # 更新数据库状态为 ready
-        from app.database import EpisodeRepositorySync
-        EpisodeRepositorySync.update_status_sync(episode_id, "ready")
-
-        logger.info(f"Episode bundle saved for {episode_id}")
-
     except Exception as e:
         writer.rollback()
-        # 更新数据库状态为 failed
-        from app.database import EpisodeRepositorySync
-        EpisodeRepositorySync.update_status_sync(episode_id, "failed", str(e))
+        _mark_failed_best_effort(episode_id, str(e))
         raise
+
+    # 阶段 2：文件已持久化 → 更新 DB 状态为 ready。
+    # 关键：DB 状态写失败（锁冲突等可重试的瞬时故障）绝不 rollback 已 commit 的文件，
+    # 否则整集 LLM 工作白费（systematic-debugging：ep_1784977817686 收尾撞
+    # 'database is locked' 后 rollback 全部产物）。
+    from app.database import EpisodeRepositorySync
+    try:
+        EpisodeRepositorySync.update_status_sync(episode_id, "ready")
+        logger.info(f"Episode bundle saved for {episode_id}")
+    except Exception as db_err:
+        logger.error(
+            f"files committed for {episode_id} but DB status update failed: {db_err}. "
+            f"Files preserved (not rolled back) — recoverable on resume."
+        )
+        # best-effort 标 failed；二次失败不掩盖原始 ready 错误。
+        _mark_failed_best_effort(episode_id, f"DB status update failed: {db_err}")
+        raise
+
+
+def _mark_failed_best_effort(episode_id: str, error_msg: str) -> None:
+    """best-effort 标记 episode failed；二次 DB 失败只记日志，不冒泡
+    （避免错误处理路径的二次异常掩盖原始错误）。"""
+    from app.database import EpisodeRepositorySync
+    try:
+        EpisodeRepositorySync.update_status_sync(episode_id, "failed", error_msg)
+    except Exception:
+        logger.exception(
+            f"failed to mark {episode_id} as failed (DB write error). "
+            f"Original error was: {error_msg}"
+        )
