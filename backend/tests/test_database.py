@@ -228,3 +228,73 @@ class TestSyncDbBusyTimeout:
         with _sync_db() as db:
             row = db.execute("SELECT status FROM episode WHERE id='ep1'").fetchone()
         assert row[0] == "ready"
+
+    def test_update_status_sync_retries_on_locked(self, monkeypatch):
+        """对 'database is locked' 指数退避重试，最终成功（不再因偶发锁冲突炸掉）。
+
+        真实事故：busy_timeout=30s 仍可能被超长持锁（>30s）的并发连接击败，
+        update_status_sync("ready") 单次失败即 rollback 整集。重试让偶发锁冲突
+        可自愈。
+        """
+        import sqlite3
+        import app.database
+        from app.database import EpisodeRepositorySync
+
+        # 共享状态：前 2 次 execute 抛 locked，第 3 次成功。每次 with 新建 fake db。
+        state = {"fails_remaining": 2, "dbs_created": 0, "execs": 0}
+
+        class _FakeDb:
+            def __init__(self):
+                state["dbs_created"] += 1
+
+            def execute(self, sql, params=()):
+                state["execs"] += 1
+                if state["fails_remaining"] > 0:
+                    state["fails_remaining"] -= 1
+                    raise sqlite3.OperationalError("database is locked")
+
+            def commit(self):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        monkeypatch.setattr(app.database, "_sync_db", lambda: _FakeDb())
+        # 退避不真实等待
+        monkeypatch.setattr(app.database.time, "sleep", lambda *_a, **_kw: None)
+
+        # 前 2 次 execute 抛 locked → 重试 → 第 3 次成功（不抛）
+        EpisodeRepositorySync.update_status_sync("ep_x", "ready")
+
+        assert state["execs"] == 3, f"应重试到第 3 次，实际 execute {state['execs']} 次"
+        assert state["dbs_created"] == 3, "每次重试应新建连接"
+
+    def test_update_status_sync_raises_non_lock_error(self, monkeypatch):
+        """非锁错误（如 'no such table'）不重试，直接抛。"""
+        import sqlite3
+        import app.database
+        from app.database import EpisodeRepositorySync
+
+        class _FakeDb:
+            def execute(self, sql, params=()):
+                raise sqlite3.OperationalError("no such table: episode")
+
+            def commit(self):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        monkeypatch.setattr(app.database, "_sync_db", lambda: _FakeDb())
+        sleeps = []
+        monkeypatch.setattr(app.database.time, "sleep", lambda s: sleeps.append(s))
+
+        with pytest.raises(sqlite3.OperationalError, match="no such table"):
+            EpisodeRepositorySync.update_status_sync("ep_x", "ready")
+        assert sleeps == [], "非锁错误不应触发重试退避"

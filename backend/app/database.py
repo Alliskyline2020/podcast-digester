@@ -10,6 +10,7 @@ SQLite 单文件数据库
 """
 import aiosqlite
 import sqlite3
+import time
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Callable
 from datetime import datetime
@@ -749,6 +750,12 @@ def _sync_db():
     return db
 
 
+# update_status_sync 对 'database is locked' 的重试配置。
+# busy_timeout=30s 仍可能被超长持锁（>30s）击败；指数退避重试让偶发锁冲突自愈。
+STATUS_LOCK_RETRY_ATTEMPTS = 4
+STATUS_LOCK_RETRY_BACKOFF = 0.5
+
+
 class EpisodeRepositorySync:
     """Episode 同步数据访问（用于需要同步操作的上下文）"""
 
@@ -765,23 +772,49 @@ class EpisodeRepositorySync:
 
     @staticmethod
     def update_status_sync(episode_id: str, status: str, error_msg: Optional[str] = None) -> None:
-        """同步更新状态"""
-        with _sync_db() as db:
-            now = datetime.now().isoformat()
-            if error_msg:
-                db.execute("""
-                    UPDATE episode SET status = ?, error_msg = ?, updated_at = ?
-                    WHERE id = ?
-                """, (status, error_msg, now, episode_id))
-            else:
-                # 不带 error_msg ⇒ 成功/中性状态，显式清空残留错误。
-                # save_episode_bundle 的 ready 路径走这里；不清空会让已就绪的
-                # episode 长期挂着旧的失败文本。
-                db.execute("""
-                    UPDATE episode SET status = ?, error_msg = NULL, updated_at = ?
-                    WHERE id = ?
-                """, (status, now, episode_id))
-            db.commit()
+        """同步更新状态。
+
+        对 'database is locked' 指数退避重试 —— busy_timeout=30s 仍可能被
+        超长持锁的并发连接（API 进程 / WAL checkpoint）击败。重试让偶发锁
+        冲突可自愈，避免 save_episode_bundle 收尾单次失败即 rollback 整集。
+        非锁错误（schema 问题等）不重试，直接抛。
+        """
+        last_err: Optional[sqlite3.OperationalError] = None
+        for attempt in range(1, STATUS_LOCK_RETRY_ATTEMPTS + 1):
+            try:
+                with _sync_db() as db:
+                    now = datetime.now().isoformat()
+                    if error_msg:
+                        db.execute("""
+                            UPDATE episode SET status = ?, error_msg = ?, updated_at = ?
+                            WHERE id = ?
+                        """, (status, error_msg, now, episode_id))
+                    else:
+                        # 不带 error_msg ⇒ 成功/中性状态，显式清空残留错误。
+                        # save_episode_bundle 的 ready 路径走这里；不清空会让已就绪的
+                        # episode 长期挂着旧的失败文本。
+                        db.execute("""
+                            UPDATE episode SET status = ?, error_msg = NULL, updated_at = ?
+                            WHERE id = ?
+                        """, (status, now, episode_id))
+                    db.commit()
+                return
+            except sqlite3.OperationalError as e:
+                msg = str(e).lower()
+                is_lock = "locked" in msg or "busy" in msg
+                if is_lock and attempt < STATUS_LOCK_RETRY_ATTEMPTS:
+                    last_err = e
+                    backoff = STATUS_LOCK_RETRY_BACKOFF * attempt
+                    logger.warning(
+                        f"update_status_sync({episode_id}, {status}) locked, "
+                        f"retry {attempt}/{STATUS_LOCK_RETRY_ATTEMPTS - 1} after {backoff:.1f}s"
+                    )
+                    time.sleep(backoff)
+                    continue
+                raise
+        # 重试耗尽（不应到达：末次 attempt 会 raise）
+        if last_err:
+            raise last_err
 
 
 class IngestJobRepositorySync:
