@@ -40,6 +40,14 @@ def test_infer_unknown_provider_defaults_to_openai():
     assert infer_provider_type("totally-unknown") == "openai_compatible"
 
 
+def test_deepseek_default_model_is_v4_flash():
+    """回归（systematic-debugging）：deepseek-chat 是 deepseek-v4-flash 的非思考别名，
+    2026/07/24 15:59 UTC 端点下线后已 400 拒收（实测 /v1/models 仅返回 v4-flash/v4-pro）。
+    默认 model 必须是 deepseek-v4-flash——否则开箱即 400，所有 LLM 调用失败。
+    非思考行为由 OpenAIAdapter(disable_thinking=True) 注入 thinking:disabled 复现。"""
+    assert PROVIDERS["deepseek"]["default_model"] == "deepseek-v4-flash"
+
+
 def test_deepseek_legacy_alias_works(clean_llm_env, monkeypatch):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-legacy")
     monkeypatch.setenv("DEEPSEEK_MODEL", "deepseek-chat")

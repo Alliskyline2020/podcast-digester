@@ -2,6 +2,7 @@
 import pytest
 
 import app.llm.client as client_module
+from app.llm.config import LLMConfig
 from app.llm.protocols import LLMResponse
 
 
@@ -34,6 +35,33 @@ async def test_complete_dispatches_to_openai_adapter_for_deepseek(monkeypatch):
     assert resp.content == '{"a":1}'
     assert calls[0]["model"] == "deepseek-chat"
     assert calls[0]["response_format"] == {"type": "json_object"}
+
+
+# ---------- _get_adapter：DeepSeek 默认关思考，其它 provider 不关 ----------
+#
+# 回归（systematic-debugging）：DeepSeek-V4 默认开思考模式（CoT 吃 token 预算、
+# 可致 JSON 截断），旧 deepseek-chat 是非思考别名、2026/07/24 下线。_get_adapter
+# 必须对 deepseek provider 构造 OpenAIAdapter(disable_thinking=True) 复现旧默认；
+# 其它 OpenAI 兼容 provider 不得关思考（避免把 DeepSeek 私有扩展砸到无关端点）。
+
+def _cfg(provider, provider_type="openai_compatible"):
+    return LLMConfig(provider, provider_type, "sk", "https://example.com",
+                     "m", 0.3, None, 60.0)
+
+
+def test_get_adapter_disables_thinking_for_deepseek():
+    from app.llm.protocols import OpenAIAdapter
+    adapter = client_module._get_adapter(_cfg("deepseek"), timeout=30.0)
+    assert isinstance(adapter, OpenAIAdapter)
+    assert adapter.disable_thinking is True
+
+
+def test_get_adapter_keeps_thinking_for_other_openai_providers():
+    from app.llm.protocols import OpenAIAdapter
+    for provider in ("openai", "glm", "qwen", "moonshot", "totally-unknown"):
+        adapter = client_module._get_adapter(_cfg(provider), timeout=30.0)
+        assert isinstance(adapter, OpenAIAdapter)
+        assert adapter.disable_thinking is False, f"{provider} 不应被关思考"
 
 
 @pytest.mark.asyncio

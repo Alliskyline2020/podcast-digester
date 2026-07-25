@@ -29,11 +29,12 @@ PROVIDERS: dict[str, dict] = {
         "title": "DeepSeek",
         "provider_type": "openai_compatible",
         "default_base_url": "https://api.deepseek.com",
-        # deepseek-chat = deepseek-v4-flash 的「非思考模式」(快/便宜)。deepseek-chat/reasoner
-        # 旧名 2026/07/24 废弃但仍别名可用；deepseek-v4-flash 默认开「思考模式」(更慢、token 消耗更大，
-        # 行为不同)，故默认保持 deepseek-chat(非思考)，而非直接切 v4-flash——避免静默改变默认推理行为。
-        # 切到 v4-flash/v4-pro 的成本已在 cost.py 计价。
-        "default_model": "deepseek-chat",
+        # deepseek-chat 是 deepseek-v4-flash 的「非思考」别名，2026/07/24 15:59 UTC 下线后
+        # 端点已 400 拒收旧名（实测 /v1/models 仅返回 v4-flash / v4-pro）。默认用 v4-flash；
+        # v4-flash 默认开「思考模式」(CoT 吃生成预算、可致 JSON 截断)，非思考行为由
+        # OpenAIAdapter(disable_thinking=True) 注入 extra_body={'thinking':{'type':'disabled'}}
+        # 复现（见 client._get_adapter）。v4-pro / 思考模式计价见 cost.py。
+        "default_model": "deepseek-v4-flash",
         "region": "国内",
     },
     "openai": {

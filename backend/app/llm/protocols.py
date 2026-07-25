@@ -27,7 +27,8 @@ class LLMResponse:
 class OpenAIAdapter:
     """openai.AsyncOpenAI 包装。覆盖 DeepSeek/OpenAI/GLM/通义/豆包/月之暗面等。"""
 
-    def __init__(self, api_key: str, base_url: str, timeout: float):
+    def __init__(self, api_key: str, base_url: str, timeout: float,
+                 disable_thinking: bool = False):
         from openai import AsyncOpenAI
         kwargs = {
             "api_key": api_key,
@@ -39,6 +40,12 @@ class OpenAIAdapter:
         if base_url:
             kwargs["base_url"] = base_url
         self._client = AsyncOpenAI(**kwargs)
+        # DeepSeek-V4 系列默认开「思考模式」(CoT 计入生成预算，可致 JSON 在 max_tokens
+        # 处截断)。旧 deepseek-chat 是 v4-flash 的非思考别名，2026/07/24 下线后端点
+        # 已 400 拒收旧名；为复现旧默认的非思考行为，由 _get_adapter 对 deepseek
+        # provider 显式置 True，complete 时注入 extra_body={'thinking':{'type':'disabled'}}。
+        # 仅 DeepSeek 启用：extra_body 是 OpenAI SDK 私有扩展，其它兼容端点可能拒收未知字段。
+        self.disable_thinking = disable_thinking
 
     async def complete(self, *, model, messages, temperature, max_tokens,
                        response_format) -> LLMResponse:
@@ -51,6 +58,8 @@ class OpenAIAdapter:
             kwargs["max_tokens"] = max_tokens
         if response_format is not None:
             kwargs["response_format"] = response_format
+        if self.disable_thinking:
+            kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
         resp = await self._client.chat.completions.create(**kwargs)
         usage = {
             "prompt_tokens": resp.usage.prompt_tokens,

@@ -16,7 +16,11 @@ def _get_adapter(cfg: LLMConfig, timeout: float):
     """按 provider_type 选 adapter。客户端不缓存（配置可热更；成本可接受）。"""
     if cfg.provider_type == "anthropic_compatible":
         return AnthropicAdapter(cfg.api_key, cfg.base_url, timeout)
-    return OpenAIAdapter(cfg.api_key, cfg.base_url, timeout)
+    # DeepSeek-V4 默认思考模式；旧 deepseek-chat(非思考)别名 2026/07/24 下线后端点
+    # 已 400 拒收。这里对 deepseek provider 关思考，复现旧默认行为（CoT 吃 token 预算、
+    # 可致 JSON 截断）。其它 OpenAI 兼容 provider 不关，避免污染。
+    disable_thinking = cfg.provider == "deepseek"
+    return OpenAIAdapter(cfg.api_key, cfg.base_url, timeout, disable_thinking=disable_thinking)
 
 
 def _is_retryable(err: Exception) -> bool:

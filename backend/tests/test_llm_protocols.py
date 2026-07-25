@@ -80,6 +80,44 @@ async def test_openai_adapter_omits_max_tokens_when_none(monkeypatch):
     assert "max_tokens" not in fake.chat.completions.last_kwargs
 
 
+# ---------- DeepSeek-V4 思考模式：default 为非思考（复现旧 deepseek-chat 行为）----------
+#
+# 回归（systematic-debugging）：deepseek-chat 是 deepseek-v4-flash 的「非思考」别名，
+# 2026/07/24 15:59 UTC 端点下线后已 400 拒收（实测 deepseek-chat → HTTP 400；
+# /v1/models 只返回 deepseek-v4-flash / deepseek-v4-pro）。但 deepseek-v4-flash 默认
+# 开「思考模式」，CoT 会吃生成预算、可致 JSON 截断——与旧默认行为不同。故默认必须
+# 显式注入 extra_body={"thinking":{"type":"disabled"}} 复现旧非思考行为。
+# 仅 DeepSeek 注入：extra_body 是 OpenAI SDK 私有扩展，其它 OpenAI 兼容端点可能拒收未知字段。
+
+@pytest.mark.asyncio
+async def test_openai_adapter_sends_thinking_disabled_when_flag_set(monkeypatch):
+    """disable_thinking=True → create 收到 extra_body={'thinking':{'type':'disabled'}}。"""
+    fake = _FakeOpenAIClient(_FakeOpenAIResponse("ok"))
+    monkeypatch.setattr("openai.AsyncOpenAI", lambda **kw: fake)
+    adapter = OpenAIAdapter(api_key="sk", base_url="https://api.deepseek.com", timeout=60,
+                            disable_thinking=True)
+    await adapter.complete(
+        model="deepseek-v4-flash",
+        messages=[{"role": "user", "content": "u"}],
+        temperature=0.3, max_tokens=8, response_format=None,
+    )
+    assert fake.chat.completions.last_kwargs["extra_body"] == {"thinking": {"type": "disabled"}}
+
+
+@pytest.mark.asyncio
+async def test_openai_adapter_omits_extra_body_when_thinking_not_disabled(monkeypatch):
+    """非 DeepSeek provider（disable_thinking 默认 False）→ 不发 extra_body，避免污染其它端点。"""
+    fake = _FakeOpenAIClient(_FakeOpenAIResponse("ok"))
+    monkeypatch.setattr("openai.AsyncOpenAI", lambda **kw: fake)
+    adapter = OpenAIAdapter(api_key="sk", base_url="", timeout=60)  # 默认 disable_thinking=False
+    await adapter.complete(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "u"}],
+        temperature=0.3, max_tokens=8, response_format=None,
+    )
+    assert "extra_body" not in fake.chat.completions.last_kwargs
+
+
 # ---------- AnthropicAdapter ----------
 
 class _FakeTextBlock:
