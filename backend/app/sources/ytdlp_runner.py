@@ -132,6 +132,26 @@ def _build_opts(platform: str = None) -> Dict[str, Any]:
     return opts
 
 
+def _build_extractor_args_cmd(opts: Dict[str, Any]) -> list:
+    """把 opts['extractor_args'] 转成 yt-dlp 命令片段 (["--extractor-args", "ext:k=v"])。
+
+    player_client 等多值参数以逗号拼接传入, yt-dlp 会按序逐个尝试并回退: 当某个
+    客户端 (如 android_vr) 被 YouTube 封锁 (HTTP 403 / "Video unavailable") 时
+    自动切到下一个 (android / ios)。配置里写好的回退链必须完整下发。
+    """
+    cmd: list = []
+    extractor_args = opts.get("extractor_args")
+    if not extractor_args:
+        return cmd
+    for ext, args in extractor_args.items():
+        for key, values in args.items():
+            if isinstance(values, list) and values:
+                # 逗号拼接全部值, 不只取第一个 —— 否则单点封锁即整链失败
+                value = ",".join(values)
+                cmd.extend(["--extractor-args", f"{ext}:{key}={value}"])
+    return cmd
+
+
 def _detect_platform(url: str) -> Optional[str]:
     """从 URL 检测平台"""
     url_lower = url.lower()
@@ -190,16 +210,8 @@ async def run_ytdlp(
         safe_url,
     ]
 
-    # 添加 extractor_args
-    if "extractor_args" in opts:
-        extractor_args = opts["extractor_args"]
-        for ext, args in extractor_args.items():
-            for key, values in args.items():
-                # values 是列表，如 ["android_vr", "android", "ios"]
-                # 只使用第一个值
-                if isinstance(values, list) and values:
-                    value = values[0]
-                    cmd.extend(["--extractor-args", f"{ext}:{key}={value}"])
+    # 添加 extractor_args (player_client 等: 逗号拼接让 yt-dlp 按序回退)
+    cmd.extend(_build_extractor_args_cmd(opts))
 
     # 添加 user_agent（如果有）
     user_agent = extra_opts.get("user_agent") if extra_opts else opts.get("_user_agent")

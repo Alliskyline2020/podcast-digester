@@ -429,3 +429,41 @@ class TestFailFastNoSubtitles:
 
         result = asyncio.run(Y._video_has_any_subtitles("https://x", None))
         assert result is True, "全部重试超时 → 保守放行 True"
+
+
+class TestExtractorArgsFallback:
+    """player_client 等多值参数必须以逗号拼接传给 yt-dlp, 不能只取第一个值。
+
+    背景: YouTube 持续封锁旧客户端 (android_vr 已被 403)。PLATFORM_CONFIGS 早已
+    配置了回退链 ["android_vr", "android", "ios"], 但 run_ytdlp 旧实现只取 values[0]
+    = "android_vr" 单值, 丢弃了后面两个 → 单点封锁即整条链失败 → 所有 YouTube
+    音频下载 HTTP 403 / "Video unavailable"。yt-dlp 的 player_client 接受逗号分隔
+    列表, 会按序逐个尝试并回退。
+    """
+
+    def test_player_client_joins_full_list(self):
+        from app.sources.ytdlp_runner import _build_extractor_args_cmd
+        opts = {"extractor_args": {"youtube": {"player_client": ["android_vr", "android", "ios"]}}}
+        cmd = _build_extractor_args_cmd(opts)
+        assert "--extractor-args" in cmd
+        idx = cmd.index("--extractor-args")
+        assert cmd[idx + 1] == "youtube:player_client=android_vr,android,ios"
+
+    def test_does_not_truncate_to_first_client(self):
+        """回归核心: 绝不能只输出 'youtube:player_client=android_vr' 单值。"""
+        from app.sources.ytdlp_runner import _build_extractor_args_cmd
+        opts = {"extractor_args": {"youtube": {"player_client": ["android_vr", "android", "ios"]}}}
+        cmd = _build_extractor_args_cmd(opts)
+        assert "youtube:player_client=android_vr" not in cmd  # 截断即 bug
+        assert "youtube:player_client=android" not in cmd  # 子串误判也排除
+
+    def test_single_client_still_works(self):
+        from app.sources.ytdlp_runner import _build_extractor_args_cmd
+        opts = {"extractor_args": {"youtube": {"player_client": ["android"]}}}
+        cmd = _build_extractor_args_cmd(opts)
+        assert "youtube:player_client=android" in cmd
+
+    def test_empty_when_no_extractor_args(self):
+        from app.sources.ytdlp_runner import _build_extractor_args_cmd
+        assert _build_extractor_args_cmd({}) == []
+        assert _build_extractor_args_cmd({"extractor_args": {}}) == []
