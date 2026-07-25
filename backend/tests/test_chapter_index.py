@@ -324,3 +324,38 @@ async def test_load_intermediate_results_round_trips_through_json(temp_data_dir)
     # the save_episode_bundle contract: both survive json.dumps without raising
     _json.dumps({"entries": result["chapters"]})
     _json.dumps(result["summaries"])
+
+
+# ===== write-side 校验：生成器边界丢弃非法条目（架构修复集成）=====
+#
+# split_into_chapters 返回前经 validate_chapters 按 OutlineEntry 校验。LLM 若返回
+# 缺必填字段(如 title_zh)的章节，必须在此丢弃——否则会落盘/入库，加载时让整组
+# outline 归 None（fail-big）。本测试端到端验证生成器不再向下游泄漏非法章节。
+
+@pytest.mark.unit
+async def test_split_into_chapters_drops_malformed_chapter(monkeypatch):
+    """fake LLM 返回一条缺 title_zh 的非法章节，split_into_chapters 经 validate_chapters
+    丢弃它，只返回合法章节，且 index 连续重排。"""
+    from app.llm_pipeline import llm_split
+
+    async def fake_chat_json(*args, **kwargs):
+        return {
+            "chapters": [
+                {"title_zh": "好章", "start_segment_id": 0, "end_segment_id": 1},
+                {"start_segment_id": 1, "end_segment_id": 2},  # 缺 title_zh → 非法
+                {"title_zh": "好章2", "start_segment_id": 2, "end_segment_id": 4},
+            ]
+        }
+
+    monkeypatch.setattr(llm_split, "chat_json", fake_chat_json)
+    segs = [
+        Segment(id=i, start_ms=i * 1000, end_ms=(i + 1) * 1000, text_original=f"s{i}")
+        for i in range(5)
+    ]
+    transcript = Transcript(episode_id="ep_drop", language="zh", segments=segs)
+
+    chapters = await llm_split.split_into_chapters(transcript)
+
+    titles = [c["title_zh"] for c in chapters]
+    assert titles == ["好章", "好章2"], f"应丢弃缺 title_zh 的中间章，实际: {titles}"
+    assert [c["index"] for c in chapters] == [0, 1], "丢弃后 index 应连续重排"

@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from ..llm import chat_json
 from ..prompts import CHAPTERIZE_SYSTEM, build_chapterize_user
 from ._segtext import chinese_text
+from .derived_validation import validate_chapters
 
 
 logger = logging.getLogger(__name__)
@@ -94,11 +95,10 @@ async def split_into_chapters(
 
         logger.info(f"Chapter split completed: {len(chapters)} chapters")
 
-        # Inject positional index here (not later in summarize) so the
-        # outline.json checkpoint written by the caller is safe to resume
-        # from — OutlineEntry requires `index`.
-        for i, ch in enumerate(chapters):
-            ch["index"] = i
+        # Write-side 校验：按 OutlineEntry 校验、丢非法条目、回填并连续重排 index，
+        # 返回 model_dump dict——让 outline.json 与 OutlineRepository 落盘的内容永远
+        # 可被 loader 直接重构（消除「单坏条目入库后在 load 处炸整组」的 fail-big）。
+        chapters = validate_chapters(chapters)
 
         if progress_cb:
             progress_cb(1.0)
@@ -179,9 +179,8 @@ async def _split_with_windowing(
 
     logger.info(f"Window merge completed: {len(merged_chapters)} chapters")
 
-    # Inject positional index (see single-process path above for rationale).
-    for i, ch in enumerate(merged_chapters):
-        ch["index"] = i
+    # Write-side 校验 + index 回填/连续重排（见单遍路径注释）。
+    merged_chapters = validate_chapters(merged_chapters)
 
     if progress_cb:
         progress_cb(1.0)

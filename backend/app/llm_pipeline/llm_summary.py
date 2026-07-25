@@ -13,6 +13,7 @@ from typing import List, Dict, Any, Optional, TYPE_CHECKING
 from ..llm import chat_json
 from ..prompts import SUMMARIZE_SYSTEM, build_summarize_user
 from ._segtext import chinese_text
+from .derived_validation import validate_summaries
 
 if TYPE_CHECKING:
     from ..models import Transcript
@@ -112,4 +113,7 @@ async def generate_chapter_summaries(
 
     logger.info(f"Generated {len(results)} chapter summaries")
 
-    return results
+    # Write-side 校验：按 ChapterSummary 校验、丢非法条目(content_zh<50 / key_points<2
+    # 等)、返回 model_dump dict。让 summaries.json 与 SummariesRepository 落盘的内容
+    # 永远可加载（消除「单坏摘要入库后在 load 处炸整组 → 章内 bullets 全空」的 fail-big）。
+    return validate_summaries(results)
