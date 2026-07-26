@@ -298,3 +298,84 @@ class TestSyncDbBusyTimeout:
         with pytest.raises(sqlite3.OperationalError, match="no such table"):
             EpisodeRepositorySync.update_status_sync("ep_x", "ready")
         assert sleeps == [], "非锁错误不应触发重试退避"
+
+
+@pytest.mark.unit
+class TestSyncGetByIdDecodesJson:
+    """get_by_id_sync 必须和 async get_by_id 一样 json.loads(paragraph_mappings)。
+
+    episode 表把 paragraph_mappings 存成 JSON 字符串（TEXT）。async get_by_id /
+    list_all / search 都解码成 list，唯独 sync get_by_id_sync 历史上返回裸 dict(row)
+    → EpisodeManager.get_bundle → Episode(**data) 因 paragraph_mappings 是 str 而非
+    list 抛 ValidationError（Pydantic Optional[List[Dict]]）。离线/同步调用方拿不到
+    bundle。修在源头（sync getter），所有同步调用方一次性修复。
+    """
+
+    def test_get_by_id_sync_decodes_paragraph_mappings(self, monkeypatch, tmp_path):
+        import json
+        import app.database
+        from app.database import EpisodeRepositorySync, _sync_db
+
+        monkeypatch.setattr(app.database, "DB_PATH", tmp_path / "t.db")
+        payload = [{"id": 0, "start_ms": 120, "end_ms": 109200, "text": "hi"}]
+        with _sync_db() as db:
+            db.execute(
+                "CREATE TABLE episode (id TEXT PRIMARY KEY, paragraph_mappings TEXT)"
+            )
+            db.execute(
+                "INSERT INTO episode (id, paragraph_mappings) VALUES (?, ?)",
+                ("ep1", json.dumps(payload)),
+            )
+            db.commit()
+
+        data = EpisodeRepositorySync.get_by_id_sync("ep1")
+
+        assert data is not None
+        assert isinstance(data["paragraph_mappings"], list), (
+            "sync getter 应把 paragraph_mappings JSON 字符串解码成 list"
+        )
+        assert data["paragraph_mappings"] == payload
+
+    def test_get_by_id_sync_bad_paragraph_mappings_becomes_none(self, monkeypatch, tmp_path):
+        """损坏的 JSON 不抛错，降级为 None（与 async get_by_id 的 except 分支一致）。"""
+        import app.database
+        from app.database import EpisodeRepositorySync, _sync_db
+
+        monkeypatch.setattr(app.database, "DB_PATH", tmp_path / "t.db")
+        with _sync_db() as db:
+            db.execute(
+                "CREATE TABLE episode (id TEXT PRIMARY KEY, paragraph_mappings TEXT)"
+            )
+            db.execute(
+                "INSERT INTO episode (id, paragraph_mappings) VALUES (?, ?)",
+                ("ep1", "{not valid json"),
+            )
+            db.commit()
+
+        data = EpisodeRepositorySync.get_by_id_sync("ep1")
+
+        assert data is not None
+        assert data["paragraph_mappings"] is None, (
+            "损坏的 paragraph_mappings 应降级为 None，不让整次读取炸掉"
+        )
+
+    def test_get_by_id_sync_null_paragraph_mappings_stays_none(self, monkeypatch, tmp_path):
+        """NULL / 空 paragraph_mappings 保持 None，不误触发解码。"""
+        import app.database
+        from app.database import EpisodeRepositorySync, _sync_db
+
+        monkeypatch.setattr(app.database, "DB_PATH", tmp_path / "t.db")
+        with _sync_db() as db:
+            db.execute(
+                "CREATE TABLE episode (id TEXT PRIMARY KEY, paragraph_mappings TEXT)"
+            )
+            db.execute(
+                "INSERT INTO episode (id, paragraph_mappings) VALUES (?, ?)",
+                ("ep1", None),
+            )
+            db.commit()
+
+        data = EpisodeRepositorySync.get_by_id_sync("ep1")
+
+        assert data is not None
+        assert data["paragraph_mappings"] is None

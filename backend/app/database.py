@@ -768,7 +768,22 @@ class EpisodeRepositorySync:
                 "SELECT * FROM episode WHERE id = ?", (episode_id,)
             )
             row = cursor.fetchone()
-            return dict(row) if row else None
+            if not row:
+                return None
+            data = dict(row)
+            # 与 async get_by_id / list_all / search 对齐：paragraph_mappings 在
+            # 表里是 JSON 字符串，必须解码成 list，否则下游 Episode(**data) 会因
+            # Optional[List[Dict]] 校验抛 ValidationError（EpisodeManager.get_bundle
+            # 离线调用即触发）。损坏的 JSON 降级为 None，不让整次读取炸掉。
+            if data.get("paragraph_mappings"):
+                try:
+                    data["paragraph_mappings"] = json.loads(data["paragraph_mappings"])
+                except json.JSONDecodeError as e:
+                    logger.error(
+                        f"Failed to parse paragraph_mappings for {episode_id}: {e}"
+                    )
+                    data["paragraph_mappings"] = None
+            return data
 
     @staticmethod
     def update_status_sync(episode_id: str, status: str, error_msg: Optional[str] = None) -> None:
