@@ -379,3 +379,47 @@ class TestSyncGetByIdDecodesJson:
 
         assert data is not None
         assert data["paragraph_mappings"] is None
+
+
+@pytest.mark.unit
+@pytest.mark.database
+class TestAsyncListGettersDecodeParagraphMappings:
+    """list_all / get_by_statuses / get_by_id 共用 _decode_paragraph_mappings：
+    解码 JSON，损坏降级 None —— 不让单条坏数据炸掉整列读取。
+
+    重构前 list_all / get_by_statuses 是裸 json.loads（无 try/except），一行坏
+    paragraph_mappings 会让整个 episode 列表 500。合并到防御性 helper 后两路径
+    与 get_by_id 行为一致。
+    """
+
+    async def test_list_all_decodes_and_survives_bad_json(self, temp_db):
+        import aiosqlite
+        from datetime import datetime
+        from app import database as _db
+
+        now = datetime.now()
+        for ep_id in ("ep_good", "ep_bad"):
+            await EpisodeRepository.create({
+                "id": ep_id,
+                "title": f"T_{ep_id}",
+                "status": EpisodeStatus.READY.value,
+                "paragraph_mappings": [{"id": 0, "text": "seg"}],
+                "created_at": now,
+                "updated_at": now,
+            })
+        # 把 ep_bad 的 paragraph_mappings 改成损坏 JSON（绕过 create 的序列化）
+        async with aiosqlite.connect(str(_db.DB_PATH)) as db:
+            await db.execute(
+                "UPDATE episode SET paragraph_mappings = ? WHERE id = ?",
+                ("{not valid json", "ep_bad"),
+            )
+            await db.commit()
+
+        episodes = await EpisodeRepository.list_all()
+        by_id = {e["id"]: e for e in episodes}
+
+        assert len(episodes) == 2, "损坏行不应让整列读取炸掉"
+        assert by_id["ep_good"]["paragraph_mappings"] == [{"id": 0, "text": "seg"}]
+        assert by_id["ep_bad"]["paragraph_mappings"] is None, (
+            "损坏 JSON 应降级 None，与 get_by_id 一致"
+        )

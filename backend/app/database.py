@@ -241,6 +241,26 @@ async def get_db() -> aiosqlite.Connection:
 
 # ==================== 数据访问层 ====================
 
+
+def _decode_paragraph_mappings(data: dict, episode_id: str) -> None:
+    """把 episode 行里的 paragraph_mappings 从 JSON 字符串原地解码成 list。
+
+    episode 表把 paragraph_mappings 存成 TEXT(JSON)，Pydantic Episode 字段是
+    Optional[List[Dict]]，读取时必须解码。损坏的 JSON 降级为 None 并记日志，
+    不让单条坏数据炸掉整列读取（否则 list_all / get_by_statuses 会因一行坏
+    paragraph_mappings 让整个 episode 列表 500）。get_by_id / list_all /
+    get_by_statuses / get_by_id_sync 共用此 helper。
+    """
+    raw = data.get("paragraph_mappings")
+    if not raw:
+        return
+    try:
+        data["paragraph_mappings"] = json.loads(raw)
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse paragraph_mappings for {episode_id}: {e}")
+        data["paragraph_mappings"] = None
+
+
 class EpisodeRepository:
     """节目数据访问"""
 
@@ -289,13 +309,7 @@ class EpisodeRepository:
                     row = await cursor.fetchone()
                     if row:
                         data = dict(row)
-                        # Deserialize paragraph_mappings JSON if present
-                        if data.get("paragraph_mappings"):
-                            try:
-                                data["paragraph_mappings"] = json.loads(data["paragraph_mappings"])
-                            except json.JSONDecodeError as e:
-                                logger.error(f"Failed to parse paragraph_mappings for {episode_id}: {e}")
-                                data["paragraph_mappings"] = None
+                        _decode_paragraph_mappings(data, episode_id)
                         return data
                     return None
         except aiosqlite.DatabaseError as e:
@@ -314,9 +328,7 @@ class EpisodeRepository:
                 episodes = []
                 for row in rows:
                     data = dict(row)
-                    # Deserialize paragraph_mappings JSON if present
-                    if data.get("paragraph_mappings"):
-                        data["paragraph_mappings"] = json.loads(data["paragraph_mappings"])
+                    _decode_paragraph_mappings(data, data.get("id", "?"))
                     episodes.append(data)
                 return episodes
 
@@ -354,9 +366,7 @@ class EpisodeRepository:
                 episodes = []
                 for row in rows:
                     data = dict(row)
-                    # Deserialize paragraph_mappings JSON if present
-                    if data.get("paragraph_mappings"):
-                        data["paragraph_mappings"] = json.loads(data["paragraph_mappings"])
+                    _decode_paragraph_mappings(data, data.get("id", "?"))
                     episodes.append(data)
                 return episodes
 
@@ -771,18 +781,7 @@ class EpisodeRepositorySync:
             if not row:
                 return None
             data = dict(row)
-            # 与 async get_by_id / list_all / search 对齐：paragraph_mappings 在
-            # 表里是 JSON 字符串，必须解码成 list，否则下游 Episode(**data) 会因
-            # Optional[List[Dict]] 校验抛 ValidationError（EpisodeManager.get_bundle
-            # 离线调用即触发）。损坏的 JSON 降级为 None，不让整次读取炸掉。
-            if data.get("paragraph_mappings"):
-                try:
-                    data["paragraph_mappings"] = json.loads(data["paragraph_mappings"])
-                except json.JSONDecodeError as e:
-                    logger.error(
-                        f"Failed to parse paragraph_mappings for {episode_id}: {e}"
-                    )
-                    data["paragraph_mappings"] = None
+            _decode_paragraph_mappings(data, episode_id)
             return data
 
     @staticmethod
