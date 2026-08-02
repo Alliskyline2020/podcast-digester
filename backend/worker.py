@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 from app.config import (
     WORKER_POLL_INTERVAL_SECONDS, WORKER_LOCK_FILE, PROCESS_CLEANUP_PATTERNS,
+    settings,
 )
 
 
@@ -207,8 +208,14 @@ class Worker:
 
         注意：此方法不返回，直到 stop() 被调用
         """
-        from app.database import EpisodeRepository, UsageLogRepository
+        from app.database import EpisodeRepository, UsageLogRepository, init_db
         from app.ingest import pipeline
+
+        # 启动时确保 DB schema 最新（如补 episode.retry_count 列）
+        try:
+            await init_db()
+        except Exception as e:
+            logger.warning(f"init_db at worker startup failed (continuing): {e}")
 
         logger.info("Worker started")
 
@@ -239,12 +246,46 @@ class Worker:
                                 )
                                 logger.info(f"Successfully processed episode: {episode_id}")
                             except Exception as e:
-                                logger.error(f"Failed to process episode {episode_id}: {e}", exc_info=True)
-                                await EpisodeRepository.update_status(
-                                    episode_id,
-                                    "failed",
-                                    error_msg=str(e)
-                                )
+                                # 临时性错误（节点不可达/限流，retryable=True）+ 未超重试上限
+                                # → 指数退避后重置 pending，下一轮 poll 重新 pick up（run_ytdlp 会换 client）。
+                                # 与 run_ytdlp 内层秒级换 client 互补：外层应对跨轮次的代理抽风/持续限流。
+                                if bool(getattr(e, "retryable", False)):
+                                    try:
+                                        retry_count = await EpisodeRepository.get_retry_count(episode_id)
+                                    except Exception:
+                                        retry_count = 0
+
+                                    if retry_count < settings.worker_max_download_retries:
+                                        backoff = settings.worker_retry_backoff * (2 ** retry_count)
+                                        logger.warning(
+                                            f"Episode {episode_id} 临时性失败（retryable）：{e}. "
+                                            f"重试 {retry_count + 1}/{settings.worker_max_download_retries}，"
+                                            f"退避 {backoff:.0f}s 后重置 pending"
+                                        )
+                                        await asyncio.sleep(backoff)
+                                        await EpisodeRepository.update_status(
+                                            episode_id,
+                                            "pending",
+                                            error_msg=str(e),
+                                            retry_count=retry_count + 1,
+                                        )
+                                    else:
+                                        logger.error(
+                                            f"Episode {episode_id} 重试 {retry_count} 次仍失败，标记 failed：{e}",
+                                            exc_info=True,
+                                        )
+                                        await EpisodeRepository.update_status(
+                                            episode_id,
+                                            "failed",
+                                            error_msg=f"重试 {retry_count} 次仍失败：{e}"
+                                        )
+                                else:
+                                    logger.error(f"Failed to process episode {episode_id}: {e}", exc_info=True)
+                                    await EpisodeRepository.update_status(
+                                        episode_id,
+                                        "failed",
+                                        error_msg=str(e)
+                                    )
                         else:
                             logger.warning(f"No usage log found for episode {episode_id}")
 

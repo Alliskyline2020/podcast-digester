@@ -77,6 +77,25 @@ class Settings:
             "python.*worker.py"
         ]
 
+        # ==================== yt-dlp 下载配置 ====================
+        # 之前硬编码在 ytdlp_runner._build_opts。yt-dlp 自身的 fragment 重试对
+        # 中途断流（"X bytes read, Y more expected"）最有效，保持适中；
+        # 外层多策略 fallback 则应对 client 级节点死锁（换 client 拿不同节点）。
+        self.ytdlp_socket_timeout = int(os.getenv("PODCAST_DIGESTER_YTDLP_SOCKET_TIMEOUT", "20"))
+        self.ytdlp_retries = int(os.getenv("PODCAST_DIGESTER_YTDLP_RETRIES", "3"))
+        self.ytdlp_fragment_retries = int(os.getenv("PODCAST_DIGESTER_YTDLP_FRAGMENT_RETRIES", "5"))
+        self.ytdlp_concurrent_fragments = int(os.getenv("PODCAST_DIGESTER_YTDLP_CONCURRENT_FRAGMENTS", "2"))
+        # 下载前预检 CDN 节点 TCP 连通（仅 googlevideo 类）；不通直接换策略，
+        # 避免一次 30s+ 撞墙下载。
+        self.ytdlp_node_preflight = os.getenv("PODCAST_DIGESTER_YTDLP_NODE_PREFLIGHT", "true").lower() == "true"
+        self.ytdlp_preflight_timeout = int(os.getenv("PODCAST_DIGESTER_YTDLP_PREFLIGHT_TIMEOUT", "5"))
+
+        # ==================== 下载重试配置 ====================
+        # worker 跨轮次重试：临时性下载错误（节点死锁/代理抽风/限流）的指数退避上限。
+        # 与 run_ytdlp 内层同步 client 切换互补：内层秒级换节点，外层分钟级跨轮次。
+        self.worker_max_download_retries = int(os.getenv("PODCAST_DIGESTER_WORKER_MAX_DOWNLOAD_RETRIES", "3"))
+        self.worker_retry_backoff = float(os.getenv("PODCAST_DIGESTER_WORKER_RETRY_BACKOFF", "10"))
+
         # ==================== 进程锁配置 ====================
         self.asr_lock_file = Path(os.getenv("PODCAST_DIGESTER_ASR_LOCK", "/tmp/podcast_asr.lock"))
 
@@ -98,6 +117,14 @@ class Settings:
         # product/technical/market insights verify + 每 domain top-k
         self.llm_insights_verify_enabled = os.getenv("PODCAST_DIGESTER_INSIGHTS_VERIFY_ENABLED", "true").lower() == "true"
         self.llm_insights_top_k = int(os.getenv("PODCAST_DIGESTER_INSIGHTS_TOP_K", "5"))
+
+        # ==================== 字幕 LLM 纠错 ====================
+        # pipeline 阶段 2.4（polish 前）：LLM 纠正 ASR 同音字/专有名词错误，用
+        # episode.title + description 当术语表上下文。默认关——每集 +~100s LLM
+        # 耗时和费用，需显式开启。手动端点 POST /correct-transcript 不受此开关影响。
+        self.llm_correct_transcript_enabled = os.getenv(
+            "PODCAST_DIGESTER_LLM_CORRECT_TRANSCRIPT", "false"
+        ).lower() == "true"
 
         # ==================== 性能和重试 ====================
         self.http_timeout_seconds = int(os.getenv("PODCAST_DIGESTER_HTTP_TIMEOUT", "30"))

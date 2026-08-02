@@ -16,7 +16,10 @@ import shutil
 import contextlib
 from pathlib import Path
 from typing import Optional, Callable, Any, Dict, List
+from dataclasses import dataclass, field
 import re
+from ..config import settings
+from ..errors import DownloadError, DownloadTemporaryError
 from ..utils.validation import sanitize_url
 from ..utils.cookie_helper import (
     find_cookies_txt,
@@ -57,15 +60,41 @@ def temp_directory():
 YTDLP_CMD = [sys.executable, "-m", "yt_dlp"]
 
 
+@dataclass(frozen=True)
+class DownloadStrategy:
+    """单个下载策略（YouTube 多 client fallback 用）。
+
+    run_ytdlp 按 PLATFORM_CONFIGS[platform].strategies 顺序尝试；某策略失败且
+    非 permanent（节点不可达 / 限流）时切换下一个，全部失败才抛
+    DownloadTemporaryError 交 worker 跨轮次重试。
+
+    字段：
+        name: 日志标识，如 "default" / "android_vr"
+        client: youtube player_client；None=不传 --extractor-args，让 yt-dlp
+                自选可达节点（避免锁死单一故障 CDN 节点）
+        preflight: 下载前是否预检 CDN 节点连通（仅 googlevideo 类有意义）
+    """
+    name: str
+    client: Optional[str]
+    preflight: bool
+
+
 # 平台特定配置
+#
+# 每个平台定义一个 strategies 列表（有序）。needs_cookies 是平台级属性
+# （"这个平台是否需要 cookie 鉴权"），被 app/utils/video.py 复用，与
+# strategies（"用什么 client 组合"）正交。
 PLATFORM_CONFIGS = {
     "youtube": {
-        "extractor_args": {
-            "youtube": {
-                "player_client": ["android_vr", "android", "ios"],
-            }
-        },
+        # 不锁定 player_client：固定 client（如 android_vr）会让 YouTube 把某些视频
+        # 锁死到单一故障 CDN 节点（如 rr5---sn-ojnpo5-c3），换代理/重试都无法绕过。
+        # 策略1 default（不传 client）→ yt-dlp 用默认 client 协商可达节点（实测 2026.08 美区 rr1 可达）。
+        # 策略2 android_vr 兜底（default 拿到的节点预检不通 / 下载失败时再试）。
         "format": "bestaudio[ext=m4a]/bestaudio/best",
+        "strategies": [
+            DownloadStrategy(name="default", client=None, preflight=True),
+            DownloadStrategy(name="android_vr", client="android_vr", preflight=True),
+        ],
     },
     "bilibili": {
         "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -74,18 +103,30 @@ PLATFORM_CONFIGS = {
         # Bilibili 反爬：不带有效 SESSDATA/buvid cookie 会直接 412。
         # 参考 feiskyer/video-skills：鉴权平台统一用 --cookies-from-browser。
         "needs_cookies": True,
+        "strategies": [
+            DownloadStrategy(name="default", client=None, preflight=False),
+        ],
     },
     "xiaoyuzhou": {
         "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
         "referer": "https://www.xiaoyuzhou.com",
         "format": "bestaudio/best",
+        "strategies": [
+            DownloadStrategy(name="default", client=None, preflight=False),
+        ],
     },
     "douyin": {
         "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
         "referer": "https://www.douyin.com",
         "format": "bestaudio/best",
+        "strategies": [
+            DownloadStrategy(name="default", client=None, preflight=False),
+        ],
     },
 }
+
+# 未知平台兜底（不预检、不锁 client）
+_DEFAULT_STRATEGIES = [DownloadStrategy(name="default", client=None, preflight=False)]
 
 
 # YouTube 限流错误关键词
@@ -99,37 +140,55 @@ RATE_LIMIT_ERRORS = [
 ]
 
 
+# 永久性错误关键词（视频 / URL 层面）。
+# 只有这些明确标志才判 permanent；网络中断 / 节点断流 / 下载中途失败 / 未知错误
+# 一律 node_unreachable（保守重试优先）。worker 有 max_download_retries 上限兜底，
+# 不会无限重试；而把临时错误误判永久会导致 fallback 失效 + episode 直接 failed。
+PERMANENT_ERROR_PATTERNS = [
+    "video unavailable",
+    "private video",
+    "is private",
+    "members-only",
+    "member only",
+    "unsupported url",
+    "video not found",
+    "no longer available",
+    "has been removed",
+    "removed by the uploader",
+    "age-restricted",
+    "age restricted",
+    "no video formats",
+    "geo-restricted",
+    "geo restricted",
+    "premieres in",
+    "this video is not available",
+]
+
+
 def _is_rate_limit_error(error_msg: str) -> bool:
     """检查错误是否为限流相关"""
     error_lower = error_msg.lower()
     return any(err.lower() in error_lower for err in RATE_LIMIT_ERRORS)
 
 
-def _build_opts(platform: str = None) -> Dict[str, Any]:
-    """构建 yt-dlp 选项，支持平台特定配置"""
-    opts = {
-        "format": "bestaudio/best",
-        "retries": 5,
-        "fragment_retries": 5,
-        "concurrent_fragment_downloads": 2,
-        "socket_timeout": 30,
-    }
+def _classify_download_error(error_msg: str) -> str:
+    """把 yt-dlp 错误文本分类为下载 fallback 决策用的类型。
 
-    # 应用平台特定配置
-    if platform and platform in PLATFORM_CONFIGS:
-        platform_config = PLATFORM_CONFIGS[platform]
-        if "extractor_args" in platform_config:
-            opts["extractor_args"] = platform_config["extractor_args"]
-        if "format" in platform_config:
-            opts["format"] = platform_config["format"]
-        if "user_agent" in platform_config:
-            opts["_user_agent"] = platform_config["user_agent"]
-        if "referer" in platform_config:
-            opts["_referer"] = platform_config["referer"]
-        if platform_config.get("needs_cookies"):
-            opts["_needs_cookies"] = True
+    策略（保守重试优先）：
+      1. 限流标志 → rate_limit（等待 + 换 client）
+      2. 明确的视频/URL 永久错误 → permanent（不再试）
+      3. 其余一律 node_unreachable —— 含下载中途断流（"X bytes read, Y more
+         expected"）、连接超时/重置、5xx、未知错误。换 client/重试有救。
 
-    return opts
+    Returns:
+        "rate_limit" | "permanent" | "node_unreachable"
+    """
+    if _is_rate_limit_error(error_msg):
+        return "rate_limit"
+    error_lower = error_msg.lower()
+    if any(p in error_lower for p in PERMANENT_ERROR_PATTERNS):
+        return "permanent"
+    return "node_unreachable"
 
 
 def _detect_platform(url: str) -> Optional[str]:
@@ -154,18 +213,32 @@ async def run_ytdlp(
     platform: Optional[str] = None,
 ) -> Path:
     """
-    使用 yt-dlp 下载音频
+    使用 yt-dlp 下载音频（多策略 fallback 编排器）
+
+    遍历 PLATFORM_CONFIGS[platform].strategies 依次尝试：
+      - permanent 错误（URL 无效/视频私有删除）→ 立即抛 DownloadError，不再试
+      - node_unreachable / rate_limit → 退避后切换下一个策略
+      - 全部策略失败 → DownloadTemporaryError（retryable），交 worker 跨轮次重试
+
+    内层（秒级换 client）与 worker 外层（分钟级跨轮次）互补，避免单一故障点。
 
     Args:
         url: 视频 URL
         out_dir: 输出目录
         on_progress: 进度回调
-        extra_opts: 额外的 yt-dlp 选项（会覆盖平台配置）
-        platform: 平台标识（用于应用平台特定配置）
+        extra_opts: 额外选项（user_agent/referer 覆盖平台配置；保留兼容，当前无调用方）
+        platform: 平台标识（未指定则自动检测）
 
     Returns:
         下载的音频文件路径
+
+    Raises:
+        DownloadError: 永久性失败（不可重试）
+        DownloadTemporaryError: 所有策略失败（临时性，worker 可重试）
     """
+    import logging
+    logger = logging.getLogger(__name__)
+
     # 清理 URL 防止命令注入
     safe_url = sanitize_url(url)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -174,61 +247,216 @@ async def run_ytdlp(
     if not platform:
         platform = _detect_platform(url)
 
-    opts = _build_opts(platform)
+    config = PLATFORM_CONFIGS.get(platform, {})
+    strategies = config.get("strategies") or _DEFAULT_STRATEGIES
+    platform_name = platform or "unknown"
+
+    logger.info(
+        f"[{platform_name}] 开始下载，共 {len(strategies)} 个策略："
+        f"{[s.name for s in strategies]}"
+    )
+
+    last_error_type: Optional[str] = None
+    last_error_msg: Optional[str] = None
+
+    for idx, strategy in enumerate(strategies, 1):
+        logger.info(
+            f"[{platform_name}] 策略 {idx}/{len(strategies)}: {strategy.name} "
+            f"(client={strategy.client}, preflight={strategy.preflight})"
+        )
+
+        success, error_type, error_msg, audio_path = await _try_audio_download(
+            safe_url=safe_url,
+            out_dir=out_dir,
+            strategy=strategy,
+            config=config,
+            on_progress=on_progress,
+            extra_opts=extra_opts,
+        )
+
+        if success:
+            logger.info(f"[{platform_name}] ✅ 策略 {strategy.name} 下载成功：{audio_path.name}")
+            return audio_path
+
+        last_error_type = error_type
+        last_error_msg = error_msg
+
+        # permanent 错误：换策略也没用，立即抛出
+        if error_type == "permanent":
+            logger.warning(
+                f"[{platform_name}] 策略 {strategy.name} 永久性失败：{(error_msg or '')[:200]}"
+            )
+            raise DownloadError(
+                f"下载失败（永久）：{(error_msg or 'unknown')[:500]}",
+                source_type=platform_name,
+                url=safe_url,
+            )
+
+        # node_unreachable / rate_limit：退避后换下一个策略
+        has_next = idx < len(strategies)
+        logger.info(
+            f"[{platform_name}] 策略 {strategy.name} {error_type}：{(error_msg or '')[:120]}"
+            + ("，退避后切换下一个策略" if has_next else "（已是最后策略）")
+        )
+        if has_next:
+            # rate_limit 等久一点（YouTube 瞬时限流需要冷却）；node_unreachable 短退避即可
+            await asyncio.sleep(2 if error_type == "rate_limit" else 1)
+
+    # 所有策略失败 → 临时性错误，交 worker 跨轮次重试
+    raise DownloadTemporaryError(
+        f"所有下载策略失败（最后错误类型={last_error_type}）：{(last_error_msg or 'unknown')[:500]}",
+        source_type=platform_name,
+        url=safe_url,
+        suggested_retry_seconds=60,
+    )
+
+
+async def _get_download_url(
+    safe_url: str, strategy: DownloadStrategy, timeout: int = 20
+) -> Optional[str]:
+    """用 yt-dlp -g 拿该策略下的真实媒体 URL（走 extractor，不下载）。
+
+    用于下载前预检：拿到 URL 后可单独测 CDN 节点连通性。extractor 走
+    www.youtube.com，与 googlevideo CDN 是两条路径，因此能拿到 URL 不代表
+    CDN 可达——这正是预检要区分的。
+
+    返回首个 http(s) 行；extractor 失败或超时返回 None（调用方不阻塞，回退到直接下载）。
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    cmd = YTDLP_CMD + [
+        "-g", "--no-warnings",
+        "--socket-timeout", str(settings.ytdlp_socket_timeout),
+    ]
+    if strategy.client:
+        cmd += ["--extractor-args", f"youtube:player_client={strategy.client}"]
+    cmd.append(safe_url)
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        if proc.returncode == 0:
+            for line in stdout.decode(errors="ignore").splitlines():
+                line = line.strip()
+                if line.startswith("http"):
+                    return line
+    except asyncio.TimeoutError:
+        logger.debug(f"[{strategy.name}] -g 超时（{timeout}s），跳过预检")
+    except Exception as e:
+        logger.debug(f"[{strategy.name}] -g 失败：{str(e)[:80]}，跳过预检")
+    return None
+
+
+def _probe_node_reachable(node_url: str, timeout: int) -> bool:
+    """测 CDN host HTTP 连通性（走 HTTPS_PROXY 环境变量代理）。
+
+    任何 HTTP 响应（含 403/404/405）都算「节点可达」——只关心 TCP/TLS 握手
+    能否完成。连接异常 / 超时 → 不可达。其他异常（SSL 等）保守视为可达，
+    不阻塞下载（预检本身失败不应阻断正常流程）。
+    """
+    import requests
+    try:
+        requests.head(node_url, timeout=timeout, allow_redirects=True)
+        return True
+    except (requests.ConnectionError, requests.Timeout):
+        return False
+    except Exception:
+        return True
+
+
+async def _preflight_node(node_url: str) -> bool:
+    """异步预检 CDN 节点连通性（requests 同步，丢到线程池）。"""
+    return await asyncio.to_thread(
+        _probe_node_reachable, node_url, settings.ytdlp_preflight_timeout
+    )
+
+
+async def _try_audio_download(
+    safe_url: str,
+    out_dir: Path,
+    strategy: DownloadStrategy,
+    config: Dict[str, Any],
+    on_progress: Optional[Callable[[str, float], Any]] = None,
+    extra_opts: Optional[dict] = None,
+) -> tuple[bool, Optional[str], Optional[str], Optional[Path]]:
+    """单次下载尝试（一个 strategy 一次 yt-dlp 子进程）。
+
+    Returns:
+        (success, error_type, error_msg, audio_path)
+        error_type ∈ {"node_unreachable", "rate_limit", "permanent", None}
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
     output_template = str(out_dir / "audio.%(ext)s")
 
+    # 1. 预检 CDN 节点（仅 preflight 策略 + 全局开关开启）
+    #    用 yt-dlp -g 拿真实 URL → 测 host 连通 → 不通直接换策略，
+    #    避免一次 30s+ 的撞墙下载。-g 失败（拿不到 URL）不阻塞，回退直接下载。
+    if strategy.preflight and settings.ytdlp_node_preflight:
+        node_url = await _get_download_url(safe_url, strategy)
+        if node_url:
+            reachable = await _preflight_node(node_url)
+            host_match = re.match(r"https?://([^/]+)", node_url)
+            host_str = host_match.group(1) if host_match else node_url[:60]
+            if not reachable:
+                logger.info(f"[{strategy.name}] 预检节点不可达：{host_str} → 跳过此策略")
+                return False, "node_unreachable", f"预检节点不可达: {host_str}", None
+            logger.info(f"[{strategy.name}] 预检节点可达：{host_str}")
+
+    # 2. 构建 cmd（传输参数从 settings 读，不再硬编码）
     cmd = YTDLP_CMD + [
         "--no-warnings",
         "-o", output_template,
         "--newline",
-        "-f", opts["format"],
-        safe_url,
+        "--socket-timeout", str(settings.ytdlp_socket_timeout),
+        "--retries", str(settings.ytdlp_retries),
+        "--fragment-retries", str(settings.ytdlp_fragment_retries),
+        "--concurrent-fragments", str(settings.ytdlp_concurrent_fragments),
+        "-f", config.get("format", "bestaudio/best"),
     ]
 
-    # 添加 extractor_args
-    if "extractor_args" in opts:
-        extractor_args = opts["extractor_args"]
-        for ext, args in extractor_args.items():
-            for key, values in args.items():
-                # values 是列表，如 ["android_vr", "android", "ios"]
-                # 只使用第一个值
-                if isinstance(values, list) and values:
-                    value = values[0]
-                    cmd.extend(["--extractor-args", f"{ext}:{key}={value}"])
+    if strategy.client:
+        cmd += ["--extractor-args", f"youtube:player_client={strategy.client}"]
 
-    # 添加 user_agent（如果有）
-    user_agent = extra_opts.get("user_agent") if extra_opts else opts.get("_user_agent")
+    # user_agent：extra_opts 覆盖平台配置（保留兼容）
+    user_agent = extra_opts.get("user_agent") if extra_opts else config.get("user_agent")
     if user_agent:
-        cmd.extend(["--user-agent", user_agent])
+        cmd += ["--user-agent", user_agent]
 
-    # 添加 referer（如果有）
-    referer = extra_opts.get("referer") if extra_opts else opts.get("_referer")
+    # referer：extra_opts 覆盖平台配置
+    referer = extra_opts.get("referer") if extra_opts else config.get("referer")
     if referer:
-        cmd.extend(["--referer", referer])
+        cmd += ["--referer", referer]
 
-    # 添加 Cookies（反爬平台需要：bilibili 等）
-    # YouTube 音频走 android_vr 客户端无需 cookie；bilibili 不带 cookie 会 412。
-    # 浏览器是多域名活跃会话（最可靠）；cookies.txt 通常是单站点导出（如 YouTube），
-    # 对其他平台无效——因此这里浏览器优先，cookies.txt 仅作兜底。
-    if opts.get("_needs_cookies"):
-        import logging
-        _logger = logging.getLogger(__name__)
+    # Cookies（needs_cookies 平台：浏览器优先，cookies.txt 兜底）
+    # YouTube 音频走 default/android_vr 客户端无需 cookie；bilibili 不带 cookie 会 412。
+    # 浏览器是多域名活跃会话（最可靠）；cookies.txt 通常是单站点导出，对其他平台
+    # 无效——因此浏览器优先，cookies.txt 仅作兜底。
+    if config.get("needs_cookies"):
         browser = get_best_browser()
         if browser:
-            cmd.extend(["--cookies-from-browser", browser])
-            _logger.info(f"[{platform}] 使用浏览器 cookies 鉴权下载: {browser}")
+            cmd += ["--cookies-from-browser", browser]
+            logger.info(f"[{strategy.name}] 使用浏览器 cookies 鉴权下载: {browser}")
         else:
             cookies_file = find_cookies_txt()
             if cookies_file and cookies_file.exists():
-                cmd.extend(["--cookies", str(cookies_file)])
-                _logger.info(f"[{platform}] 无浏览器 cookie，回退 cookies.txt 鉴权下载")
+                cmd += ["--cookies", str(cookies_file)]
+                logger.info(f"[{strategy.name}] 无浏览器 cookie，回退 cookies.txt 鉴权下载")
             else:
-                _logger.warning(
-                    f"[{platform}] 需要 cookie 鉴权但未找到浏览器 cookie 或 cookies.txt，"
+                logger.warning(
+                    f"[{strategy.name}] 需要 cookie 鉴权但未找到浏览器 cookie 或 cookies.txt，"
                     f"大概率在 412 反爬处失败。请在 Chrome 登录该平台，或放置 cookies.txt。"
                 )
 
-    # 执行下载
+    cmd.append(safe_url)
+
+    # 3. 执行下载
     process = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
@@ -243,20 +471,21 @@ async def run_ytdlp(
     stdout, stderr = await process.communicate()
 
     if process.returncode != 0:
-        error_msg = stderr.decode() if stderr else "Unknown error"
-        raise RuntimeError(f"yt-dlp failed (exit code {process.returncode}): {error_msg}")
+        error_msg = stderr.decode(errors="ignore") if stderr else "Unknown error"
+        error_type = _classify_download_error(error_msg)
+        return False, error_type, f"yt-dlp failed (exit code {process.returncode}): {error_msg}", None
 
-    # 查找下载的文件（支持更多扩展名）
+    # 4. 查找下载的文件（支持更多扩展名）
     for ext in [".m4a", ".mp3", ".mp4", ".webm", ".mkv", ".opus"]:
         audio_path = out_dir / f"audio{ext}"
         if audio_path.exists():
-            return audio_path
+            return True, None, None, audio_path
 
     # 也尝试查找任何以 audio. 开头的文件
     for audio_file in out_dir.glob("audio.*"):
-        return audio_file
+        return True, None, None, audio_file
 
-    raise FileNotFoundError("下载完成但未找到音频文件")
+    return False, "permanent", "下载完成但未找到音频文件", None
 
 
 async def _monitor_progress(process: asyncio.subprocess.Process, callback: Callable[[str, float], Any]):

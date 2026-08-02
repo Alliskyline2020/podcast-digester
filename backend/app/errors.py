@@ -99,6 +99,37 @@ class DownloadError(PermanentError):
         super().__init__(message, episode_id, details)
 
 
+class DownloadTemporaryError(TemporaryError):
+    """媒体下载临时性失败（CDN 节点不可达、限流、网络抖动等）。
+
+    与 DownloadError（永久性）区分：这类错误换 client / 换节点 / 等待后
+    重试有较大概率成功。worker 据此 retryable=True 自动重试；run_ytdlp
+    内层也会先做 client 切换 fallback。
+    """
+
+    http_status = 503
+
+    def __init__(
+        self,
+        message: str,
+        episode_id: Optional[str] = None,
+        source_type: Optional[str] = None,
+        url: Optional[str] = None,
+        suggested_retry_seconds: int = 60,
+    ):
+        details = {}
+        if source_type:
+            details["source_type"] = source_type
+        if url:
+            details["url"] = url[:200]  # 限制长度
+        super().__init__(
+            message,
+            episode_id=episode_id,
+            suggested_retry_seconds=suggested_retry_seconds,
+            details=details,
+        )
+
+
 class ASRError(TemporaryError):
     """ASR转录失败（可能是临时性）"""
 
