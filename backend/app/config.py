@@ -87,11 +87,6 @@ class Settings:
             "PODCAST_DIGESTER_WORKER_LOCK",
             str(_project_root / ".worker_pid"),
         ))
-        self.worker_process_cleanup_patterns = [
-            "whisper",
-            "faster-whisper",
-            "python.*worker.py"
-        ]
         # Worker 跨轮次重试：仅对 retryable=True 的异常（DownloadTemporaryError 等）生效。
         # yt-dlp 内部已做 3-client × 10-fragment 重试（comma-join player_client），
         # 能耗尽到 worker 这一层还抛 DownloadTemporaryError 的，多半是持续抽风
@@ -318,7 +313,6 @@ DEFAULT_TEMPERATURE = settings.llm_default_temperature
 
 WORKER_POLL_INTERVAL_SECONDS = settings.worker_poll_interval_seconds
 WORKER_LOCK_FILE = settings.worker_lock_file
-PROCESS_CLEANUP_PATTERNS = settings.worker_process_cleanup_patterns
 WORKER_MAX_DOWNLOAD_RETRIES = settings.worker_max_download_retries
 WORKER_RETRY_BACKOFF = settings.worker_retry_backoff
 

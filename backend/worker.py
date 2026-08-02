@@ -10,7 +10,6 @@ import fcntl
 import logging
 import os
 import signal
-import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
@@ -27,7 +26,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 from app.config import (
-    WORKER_POLL_INTERVAL_SECONDS, WORKER_LOCK_FILE, PROCESS_CLEANUP_PATTERNS,
+    WORKER_POLL_INTERVAL_SECONDS, WORKER_LOCK_FILE,
     WORKER_MAX_DOWNLOAD_RETRIES, WORKER_RETRY_BACKOFF,
 )
 
@@ -116,48 +115,6 @@ class WorkerLock:
             fcntl.flock(self.lock_fd.fileno(), fcntl.LOCK_UN)
             self.lock_fd.close()
             logger.info(f"Worker lock released: {self.lock_file}")
-
-
-def cleanup_old_processes():
-    """清理可能残留的旧进程
-
-    背景：
-    - Worker 或 Whisper 进程异常终止时可能残留
-    - 残留进程占用 CPU 和内存资源
-    - 可能导致新的 ASR 任务无法获取锁
-
-    清理策略：
-    - 使用 pgrep 查找匹配进程名称的进程
-    - 跳过当前进程（避免自杀）
-    - 使用 kill -9 强制终止
-
-    清理模式：
-    - "whisper": 匹配 faster-whisper 相关进程
-    - "faster-whisper": 匹配 whisper 模型加载进程
-    - "python.*worker.py": 匹配旧的 worker 进程
-
-    注意：此函数在 Worker 获取锁后调用，确保只有一个 Worker 在执行清理
-    """
-    for proc_pattern in PROCESS_CLEANUP_PATTERNS:
-        try:
-            result = subprocess.run(
-                ["pgrep", "-f", proc_pattern],
-                capture_output=True,
-                text=True
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                pids = result.stdout.strip().split('\n')
-                for pid in pids:
-                    try:
-                        # 跳过当前进程
-                        if int(pid) == os.getpid():
-                            continue
-                        subprocess.run(["kill", "-9", pid], capture_output=True)
-                        logger.info(f"Killed old process: {pid} ({proc_pattern})")
-                    except Exception as e:
-                        logger.debug(f"Failed to kill {pid}: {e}")
-        except Exception as e:
-            logger.debug(f"Failed to search for {proc_pattern}: {e}")
 
 
 class Worker:
@@ -340,9 +297,10 @@ class Worker:
             self._worker_lock = WorkerLock(WORKER_LOCK_FILE)
 
             with self._worker_lock:
-                # 锁定成功，清理旧进程
-                cleanup_old_processes()
-
+                # 锁定成功即证明无活动 worker（同 DATA_DIR）：fcntl flock 由 OS 在
+                # 进程死亡时自动释放，取到锁 = 上一个实例已退出。早期按进程名 pgrep + kill -9
+                # 的「清理旧进程」会误杀其它克隆/同名进程（曾跨克隆误杀生产 worker），已移除。
+                # 不同 DATA_DIR 的 worker 用各自锁文件，本就独立运行，互不该杀。
                 self.running = True
 
                 try:
