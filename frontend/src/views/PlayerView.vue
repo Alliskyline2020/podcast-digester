@@ -20,6 +20,20 @@
           {{ bundle?.outline?.entries?.length || 0 }} 章节 ·
           {{ formatDuration(bundle?.transcript?.segments) }}
         </span>
+        <a
+          v-if="bundle?.episode?.source_url"
+          :href="bundle.episode.source_url"
+          :title="bundle.episode.source_url"
+          class="source-link"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          <svg class="source-link-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+          </svg>
+          <span class="source-link-url">{{ bundle.episode.source_url }}</span>
+        </a>
       </div>
       <div class="header-actions">
         <!-- 导出按钮 -->
@@ -1260,6 +1274,34 @@ defineExpose({
 
 .header-tags {
   margin: 4px 0;
+}
+
+/* 来源链接：显示原始 URL（如 YouTube），可点击新窗口打开。
+   violet 色系与 EpisodeTags 的 source 标签一致；长 URL 椭圆截断，
+   完整 URL 经 :title 悬停可见、href 可点。 */
+.source-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  margin-top: 2px;
+  font-size: 12px;
+  color: #7c3aed;
+  text-decoration: none;
+}
+
+.source-link:hover {
+  text-decoration: underline;
+}
+
+.source-link-icon {
+  flex-shrink: 0;
+}
+
+.source-link-url {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .header-actions {
