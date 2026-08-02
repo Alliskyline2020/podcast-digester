@@ -41,7 +41,6 @@ from .rate_limit import rate_limit, limiter as _global_limiter
 from .deps import data_dir, verify_admin, is_loopback as _is_loopback, WriteAuthMiddleware
 from .services.background_tasks import (
     log_task_exception as _log_task_exception,
-    create_background_task as _create_background_task,
     sync_episode_modules as _sync_episode_modules,
 )
 from .services.episode_loader import (
@@ -65,8 +64,8 @@ from .routers import llm_config as llm_config_router
 logger = logging.getLogger(__name__)
 
 # 注：verify_admin / _is_loopback / data_dir 来自 .deps，
-# _log_task_exception / _create_background_task / _sync_episode_modules 来自
-# .services.background_tasks，均已通过顶部 import 引入。
+# _log_task_exception / _sync_episode_modules 来自 .services.background_tasks，
+# 均已通过顶部 import 引入。
 
 # ==================== 数据传输对象 ====================
 #
@@ -90,8 +89,13 @@ class HealthResponse(BaseModel):
 async def lifespan(_: FastAPI):
     """应用生命周期（取代已弃用的 @app.on_event("startup")）。
 
-    启动：init_db → 拉起 task_recovery 后台任务；yield 后进入服务期。
+    启动：init_db；yield 后进入服务期。
     关闭：当前无额外清理（Worker 单例锁、DB 连接随进程退出自动释放）。
+
+    任务恢复由 worker 负责（不再在 API 进程跑）：worker 是串行单 owner，启动后
+    首轮 poll 即把 mid-state 孤儿（downloading/asr_running/llm_running，上次崩溃
+    残留）重置 pending 并经 resume_episode 按 checkpoint 续点。API 只置状态、不
+    碰 pipeline，消除 API/worker 抢同一集的竞态。
     """
     log = logging.getLogger(__name__)
     log.info("Starting Podcast Digester backend")
@@ -101,11 +105,6 @@ async def lifespan(_: FastAPI):
     except Exception as e:
         log.error(f"Database initialization failed: {e}")
         raise
-
-    # 恢复未完成的任务（后台任务，不阻塞启动）
-    from .task_recovery import recover_pending_tasks
-    _create_background_task(recover_pending_tasks(), name="recover_pending_tasks")
-    log.info("Task recovery started")
 
     yield
 

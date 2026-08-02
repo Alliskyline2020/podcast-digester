@@ -531,11 +531,12 @@ async def cancel_episode(episode_id: str) -> CancelResponse:
 @router.post("/api/episode/{episode_id}/resume", response_model=ResumeResponse)
 async def resume_episode(episode_id: str, request: ResumeRequest) -> ResumeResponse:
     """
-    恢复中断或失败的任务
+    恢复中断或失败的任务（入队，由 worker 串行处理）
 
-    从上次完成的阶段继续处理，而非从头开始。
-    会检查已存在的文件（transcript.json, outline.json 等），
-    只执行未完成的阶段。
+    不在 API 进程里跑 resume_episode——那会与单例 worker 抢同一集（两进程
+    同时改 transcript.json/checkpoint，竞态损坏）。改为置 pending + 清
+    retry_count，让 worker 在下一轮 poll 取走，走 resume_episode 按 checkpoint
+    精确续点（已完成阶段跳过，损坏产物重跑）。
     """
     import logging
     logger = logging.getLogger(__name__)
@@ -545,7 +546,7 @@ async def resume_episode(episode_id: str, request: ResumeRequest) -> ResumeRespo
     if not ep_data:
         raise HTTPException(status_code=404, detail="节目不存在")
 
-    # 只能恢复失败或就绪状态的节目
+    # 只能恢复失败或就绪状态的节目（mid-state 由 worker 卡死自愈自动恢复）
     status = ep_data.get("status")
     if status not in ["failed", "ready"]:
         raise HTTPException(
@@ -553,7 +554,8 @@ async def resume_episode(episode_id: str, request: ResumeRequest) -> ResumeRespo
             detail=f"只能恢复失败或完成的任务，当前状态：{status}"
         )
 
-    # 获取原始输入：请求体优先 > source 表 > usage_log（paste 一定写过）
+    # 校验原始输入可恢复（请求体优先 > source 表 > usage_log），提早给用户错误反馈。
+    # worker 取任务时会再 resolve 一次，这里只做存在性校验、不持久化。
     raw_input = request.raw_input
     if not raw_input:
         from ..database import SourceRepository
@@ -566,30 +568,13 @@ async def resume_episode(episode_id: str, request: ResumeRequest) -> ResumeRespo
                 detail="找不到原始URL，请提供raw_input参数"
             )
 
-    # 标记状态为处理中
-    await EpisodeRepository.update_status(episode_id, EpisodeStatus.PENDING)
+    # 入队：置 pending + 清 retry_count（手动恢复给一份全新的重试预算）。
+    # worker 下一轮 poll 取走 → resume_episode → 按 checkpoint 跳过已完成阶段。
+    await EpisodeRepository.update_status(
+        episode_id, EpisodeStatus.PENDING, retry_count=0
+    )
 
-    # 在后台启动恢复任务
-    async def run_resume():
-        from ..pipeline import pipeline as audio_pipeline
-        try:
-            await audio_pipeline.resume_episode(
-                episode_id,
-                raw_input,  # 使用从 source 表/usage_log 获取的 URL
-                on_progress=lambda sid, prog, overall: None,
-            )
-        except Exception as e:
-            logger.exception(f"Resume failed for {episode_id}: {e}")
-            await EpisodeRepository.update_status(
-                episode_id,
-                EpisodeStatus.FAILED,
-                error_msg=str(e)
-            )
-
-    import asyncio
-    create_background_task(run_resume(), name=f"resume:{episode_id}")
-
-    logger.info(f"Episode {episode_id} resume started")
+    logger.info(f"Episode {episode_id} enqueued for resume (pending, retry_count cleared)")
 
     return ResumeResponse(
         success=True,

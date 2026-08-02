@@ -31,6 +31,11 @@ from app.config import (
     WORKER_MAX_DOWNLOAD_RETRIES, WORKER_RETRY_BACKOFF,
 )
 
+# mid-state：episode 处于这些状态时若被 worker 发现，必然是上次进程崩溃留下的
+# 孤儿——worker 串行单例（fcntl 锁 + 阻塞式 await），poll 期间不处理任何任务，
+# 故 poll 中看到的 mid-state 不可能是「正被本 worker 处理」。安全重置 pending 续跑。
+_MID_PROCESS_STATUSES = ["downloading", "asr_running", "llm_running"]
+
 
 class WorkerLock:
     """Worker 进程锁（单例模式的核心实现）
@@ -199,18 +204,19 @@ class Worker:
     async def run(self):
         """主循环
 
-        循环逻辑：
-        1. 查询 pending 状态的节目
-        2. 对每个节目：
-           - 获取原始输入（从 usage_log）
-           - 调用 pipeline.process_episode()
-           - 处理成功/失败
-        3. 等待 poll_interval 后下一轮
+        每轮：
+        1. 自愈：把 downloading/asr_running/llm_running 的孤儿重置 pending
+           （worker 串行单例，这些状态必为上次崩溃残留）。
+        2. 串行处理 pending（FIFO）：resume_episode——无 checkpoint→全量跑；
+           有 checkpoint→跳过已完成阶段。比 run_ingest 更省（重试/恢复不重做
+           已完成的下载/ASR）。
+        3. sleep poll_interval。
 
-        注意：此方法不返回，直到 stop() 被调用
+        单 owner 模型：API 只置状态、不跑 pipeline（resume 端点也只入队），
+        故不存在 API/worker 抢同一集的竞态；mid-state 只能是 worker 自身崩溃残留。
         """
         from app.database import EpisodeRepository, SourceRepository
-        from app.ingest import pipeline
+        from app.pipeline import pipeline as audio_pipeline
 
         logger.info("Worker started")
 
@@ -227,7 +233,10 @@ class Worker:
 
         while self.running:
             try:
-                # 查询 pending 状态的节目
+                # 1. 自愈：重置 mid-state 孤儿 → pending（首轮即启动扫描）。
+                await self._requeue_orphaned_mid_state()
+
+                # 2. 串行处理 pending（FIFO）。
                 pending_episodes = await EpisodeRepository.get_by_statuses(["pending"])
 
                 if pending_episodes:
@@ -237,22 +246,24 @@ class Worker:
                         episode_id = episode["id"]
                         logger.info(f"Processing episode: {episode_id}")
 
-                        # 取原始输入：与 task_recovery / 手动「恢复」按钮同路径
-                        # （source.raw_input → usage_log paste 兜底）。旧的直接读
-                        # usage_log.payload_json 既不走 source 表、也不限 event_type，
-                        # 早期失败（pipeline 还没写 source 就崩）或非 paste 事件会取错源。
+                        # 取原始输入：source.raw_input → usage_log paste 兜底
+                        # （与 resume 端点同路径）。
                         raw_input = await SourceRepository.resolve_raw_input(episode_id)
 
                         if not raw_input:
-                            logger.warning(f"No raw_input found for episode {episode_id}, skipping")
+                            # 找不到原始输入（极早期崩溃 / source 表损坏）：置 failed
+                            # 给可操作提示，而非静默 skipping 让它永远挂 pending。
+                            logger.warning(f"No raw_input found for episode {episode_id}, marking failed")
+                            await EpisodeRepository.update_status(
+                                episode_id, "failed",
+                                error_msg="找不到原始输入(URL/路径)，请在界面手动重新提交",
+                            )
                             continue
 
-                        logger.info(f"Starting ingest for {episode_id} with input: {raw_input}")
+                        logger.info(f"Starting resume for {episode_id} with input: {raw_input}")
                         try:
-                            await pipeline.run_ingest(
-                                episode_id=episode_id,
-                                raw_input=raw_input,
-                                on_progress=None
+                            await audio_pipeline.resume_episode(
+                                episode_id, raw_input, on_progress=None
                             )
                             logger.info(f"Successfully processed episode: {episode_id}")
                         except Exception as e:
@@ -264,6 +275,28 @@ class Worker:
             except Exception as e:
                 logger.error(f"Worker loop error: {e}")
                 await asyncio.sleep(self.poll_interval)
+
+    async def _requeue_orphaned_mid_state(self) -> int:
+        """把 downloading/asr_running/llm_running 的 episode 重置 pending。
+
+        worker 串行单例 + fcntl 锁：本方法运行时本 worker 未在处理任何任务
+        （run() 是阻塞串行），故这些 mid-state 必为上次进程崩溃残留的孤儿，
+        安全重置。retry_count 保留（崩溃不计入瞬时重试预算，但保留可观测性）。
+
+        Returns:
+            重置的 episode 数。
+        """
+        from app.database import EpisodeRepository
+
+        stuck = await EpisodeRepository.get_by_statuses(_MID_PROCESS_STATUSES)
+        for ep in stuck:
+            eid = ep["id"]
+            logger.warning(
+                f"[self-heal] re-enqueue stuck {eid} "
+                f"(status={ep.get('status')}) → pending"
+            )
+            await EpisodeRepository.update_status(eid, "pending")
+        return len(stuck)
 
     async def _handle_episode_failure(self, episode_id: str, exc: Exception) -> bool:
         """处理单集处理异常（从 run() 抽出便于单测）。

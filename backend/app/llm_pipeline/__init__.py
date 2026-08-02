@@ -11,8 +11,9 @@ LLM 管道编排 - 模块化处理管道
 6b. 播客专项 (llm_podcast_analyze.py)
 7. 持久化与状态移交 (storage.py)
 
-Legacy 兼容层 (legacy.py):
-- run_llm_pipeline: 供 task_recovery.py 使用的遗留接口
+注：旧的 legacy.py（run_llm_pipeline）已随 task_recovery.py 一并移除——任务恢复
+改由 worker 单 owner 在 poll 中经 pipeline.resume_episode 按 checkpoint 续点，
+不再需要 LLM-only 的遗留恢复路径。
 """
 
 from .llm_split import split_into_chapters
@@ -29,8 +30,6 @@ from .llm_podcast_analyze import (
     analyze_podcast_insights,
     analyze_podcast_insights_parallel,
 )
-# Legacy compatibility for task_recovery.py
-from .legacy import run_llm_pipeline
 
 __all__ = [
     "split_into_chapters",
@@ -45,6 +44,4 @@ __all__ = [
     "analyze_podcast_viewpoints",
     "analyze_podcast_insights",
     "analyze_podcast_insights_parallel",
-    # Legacy
-    "run_llm_pipeline",
 ]

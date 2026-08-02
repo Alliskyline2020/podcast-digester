@@ -36,24 +36,6 @@ from .services.glossary import get_glossary
 logger = logging.getLogger(__name__)
 
 
-# 断点续点的阶段→产物映射。阶段 N「已完成」= 产物文件存在 **且** 校验通过
-# （合法、非空 JSON）；崩溃半写 / 损坏的产物判未完成 → 该阶段重跑，消灭静默腐烂。
-# download 阶段无独立 JSON（产物是音频文件，由 transcript.json 间接判定：有 transcript
-# 必然下过载）；translate 阶段无独立产物（结果就地写回 transcript.json，由
-# transcript.segments[].text_translated 比例判定，见 _resume_internal）。
-_STAGE_ARTIFACTS: Dict[str, str] = {
-    "transcribe": "transcript.json",
-    "chapterize": "outline.json",
-    "summarize": "summaries.json",
-    "highlight": "highlight.json",
-    "product_insights": "product_insights.json",
-}
-
-# mid-state 状态集合：worker 在这些状态下的 episode 若被发现于 poll，必然是上次
-# 进程崩溃留下的孤儿（worker 串行单例，poll 期间不处理任何任务）→ 重置 pending 续跑。
-_MID_PROCESS_STATUSES = ("downloading", "asr_running", "llm_running")
-
-
 class AudioProcessPipeline:
     """音频处理管道（8阶段处理流程）
 
