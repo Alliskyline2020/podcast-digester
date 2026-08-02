@@ -107,7 +107,10 @@ async def split_into_chapters(
 
     except Exception as e:
         logger.error(f"Chapter split failed: {e}")
-        raise RuntimeError(f"Chapter split failed: {e}")
+        # 原样上抛，保留异常类型与 retryable 属性——worker._handle_episode_failure 用
+        # getattr(exc, "retryable", False) 判定：LLMError→跨轮重试，永久错/逻辑 bug→failed。
+        # 切勿 raise RuntimeError(...)，那会洗掉 retryable，让本可重试的瞬态错变成终态 failed。
+        raise
 
 
 async def _split_with_windowing(
