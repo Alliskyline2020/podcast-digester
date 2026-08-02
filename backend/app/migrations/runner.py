@@ -49,8 +49,31 @@ async def _m001_episode_columns(db) -> None:
             logger.info("[migrate] 001 episode: ADD COLUMN %s %s", col, decl)
 
 
+async def _m002_episode_description_retry(db) -> None:
+    """补齐 episode.description（术语表/元数据）与 retry_count（下载重试计数）。
+
+    - description：episode 的视频描述。pipeline 用 title + description 当 LLM
+      字幕纠错的术语表上下文（纠正 ASR 同音字 / 专有名词，如「预知面→月之暗面」），
+      并兼作元数据。
+    - retry_count：worker 跨轮次下载重试计数（节点死锁 / 代理抽风 / 限流的指数
+      退避重试），与 run_ytdlp 内层的 client 回退（秒级）互补。
+
+    baseline CREATE TABLE 未含；本迁移幂等兜底，列已存在则跳过。
+    """
+    cur = await db.execute("PRAGMA table_info(episode)")
+    existing = {row[1] for row in await cur.fetchall()}
+    for col, decl in (
+        ("description", "TEXT"),
+        ("retry_count", "INTEGER DEFAULT 0"),
+    ):
+        if col not in existing:
+            await db.execute(f"ALTER TABLE episode ADD COLUMN {col} {decl}")
+            logger.info("[migrate] 002 episode: ADD COLUMN %s %s", col, decl)
+
+
 MIGRATIONS: list[Migration] = [
     (1, "episode_columns_title_zh_transcript", _m001_episode_columns),
+    (2, "episode_description_retry_count", _m002_episode_description_retry),
 ]
 
 

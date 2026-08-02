@@ -99,6 +99,18 @@ class DownloadError(PermanentError):
         super().__init__(message, episode_id, details)
 
 
+class DownloadTemporaryError(TemporaryError):
+    """临时性下载错误（CDN 节点不可达 / 限流 / 网络抖动），可重试。
+
+    与 DownloadError(PermanentError) 相对——后者是 URL 无效 / 视频私有删除 /
+    Unsupported URL，不可重试。worker.run_ingest 的异常处理据此决定是否
+    跨轮次重试（指数退避 + retry_count）。
+
+    ytdlp_runner._classify_download_error 负责把 yt-dlp 的 stderr 文本映射到
+    本类（node_unreachable / rate_limit）或 DownloadError（permanent）。
+    """
+
+
 class ASRError(TemporaryError):
     """ASR转录失败（可能是临时性）"""
 

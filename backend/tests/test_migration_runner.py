@@ -33,7 +33,7 @@ async def test_init_db_advances_user_version_to_latest(monkeypatch, tmp_path):
     expected = MIGRATIONS[-1][0]
     assert _user_version(str(db_path)) == expected
     cols = _episode_cols(str(db_path))
-    assert {"title_zh", "transcript"} <= cols
+    assert {"title_zh", "transcript", "description", "retry_count"} <= cols
 
 
 async def test_runner_is_idempotent_on_rerun(monkeypatch, tmp_path):
@@ -71,4 +71,28 @@ async def test_m001_backfills_missing_columns(monkeypatch, tmp_path):
 
     cols = _episode_cols(str(db_path))
     assert {"title_zh", "transcript"} <= cols, f"迁移未补齐列，实际 {cols}"
-    assert _user_version(str(db_path)) == 1
+    # runner 从 user_version=0 一路跑到最新（MIGRATIONS[-1]），不只跑 001；
+    # 本测试重点验证 001 在缺列库上补齐了 title_zh/transcript（上面 cols 断言）。
+    assert _user_version(str(db_path)) == MIGRATIONS[-1][0]
+
+
+async def test_m002_backfills_description_retry(monkeypatch, tmp_path):
+    """早期缺列库（episode 无 description/retry_count）→ 迁移 002 幂等补齐。"""
+    db_path = tmp_path / "legacy_m2.db"
+    conn = sqlite3.connect(str(db_path))
+    # 模拟「001 已应用、002 未应用」：有 title_zh/transcript，无 description/retry_count
+    conn.execute(
+        "CREATE TABLE episode (id TEXT PRIMARY KEY, title TEXT, status TEXT, "
+        "created_at TEXT, updated_at TEXT, title_zh TEXT, transcript TEXT)"
+    )
+    conn.execute("PRAGMA user_version = 1")  # 001 已应用，002 待跑
+    conn.commit()
+    conn.close()
+
+    import aiosqlite
+    async with aiosqlite.connect(str(db_path)) as db:
+        await run_migrations(db)
+
+    cols = _episode_cols(str(db_path))
+    assert {"description", "retry_count"} <= cols, f"迁移 002 未补齐列，实际 {cols}"
+    assert _user_version(str(db_path)) == 2

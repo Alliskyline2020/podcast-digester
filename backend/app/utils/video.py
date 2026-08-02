@@ -101,6 +101,48 @@ async def get_video_title(
     return fallback_name
 
 
+async def get_video_description(
+    url: str,
+    platform: Optional[str] = None,
+) -> str:
+    """
+    使用 yt-dlp 获取视频描述（LLM 字幕纠错的上下文术语表来源）。
+
+    失败时返回空串——description 是可选 context，缺失不应阻塞 pipeline
+    （与 get_video_title 不同：标题缺失会留永久占位，故标题重试而描述不重试）。
+    与 get_video_title 共享同一套 cookie 注入策略与 YT_DLP_CMD（venv yt-dlp，
+    避开系统旧版 LibreSSL 失败）。
+    """
+    cmd = YT_DLP_CMD + ["--get-description", "--no-warnings"]
+
+    if _platform_needs_cookies(platform):
+        browser = get_best_browser()
+        if browser:
+            cmd.extend(["--cookies-from-browser", browser])
+            logger.info(f"[{platform}] 描述获取使用浏览器 cookies: {browser}")
+        else:
+            cookies_file = find_cookies_txt()
+            if cookies_file and cookies_file.exists():
+                cmd.extend(["--cookies", str(cookies_file)])
+
+    try:
+        safe_url = sanitize_url(url)
+        result = subprocess.run(
+            cmd + [safe_url],
+            capture_output=True,
+            text=True,
+            timeout=YTDLP_TIMEOUT,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except subprocess.TimeoutExpired:
+        logger.warning(f"Timeout getting description for {url}")
+    except Exception as e:  # noqa: BLE001 — description 可选，任何异常回退空串
+        logger.warning(f"Failed to get description for {url}: {e}")
+
+    return ""
+
+
 def _platform_needs_cookies(platform: Optional[str]) -> bool:
     """查询平台是否需要 cookie 鉴权（基于 ytdlp_runner.PLATFORM_CONFIGS）。"""
     if not platform:

@@ -231,6 +231,7 @@ class AudioProcessPipeline:
             title_zh=title_zh,
             media_path=str(parse_result.audio_path),
             language=parse_result.language,
+            description=parse_result.description,
         )
 
         # 导出按标题命名的音频副本到「音频库」目录（中文标题优先，回退原始），
@@ -272,6 +273,12 @@ class AudioProcessPipeline:
         # 前端语种标签无法展示）。两个分支都执行，幂等。
         if transcript.language:
             await EpisodeRepository.update(episode_id, language=transcript.language)
+
+        # === 阶段 2.4: 字幕 LLM 纠错（可选，默认关）===
+        # polish 前用 LLM 纠正 ASR 同音字/专有名词（如「预知面→月之暗面」），
+        # 以 title + description 当术语表上下文。失败降级保留 raw ASR，不阻塞。
+        if settings.llm_correct_transcript_enabled:
+            await self._correct_transcript(episode_id, transcript)
 
         # === 阶段 2.5: 字幕清洗（机械预清洗 + 实体收割 + LLM 清洗）===
         # polish 前不再生成 raw ASR 段落（无意义——清洗已与分段器解耦）。
@@ -356,9 +363,8 @@ class AudioProcessPipeline:
         await self._add_stage(stages, "done", EpisodeStatus.READY, sync_stages)
 
         # 保存数据到文件系统和数据库
-        save_episode_bundle(
+        await self._save_bundle(
             episode_id,
-            self.data_dir,
             transcript=transcript,
             outline={"entries": chapters},
             summaries=summaries,
@@ -632,6 +638,75 @@ class AudioProcessPipeline:
             return Transcript(**data)
 
         return load_json_with_callback(transcript_file, prepare_transcript)
+
+    async def _correct_transcript(self, episode_id: str, transcript) -> None:
+        """LLM 字幕纠错（polish 前置）：用 episode title+description 当术语表，
+        纠正 ASR 同音字/专有名词错误，结果写回 segment.text_original。
+
+        源头清洗——让 polish 的 text_with_punct 基于干净文本，下游全部消费干净文本。
+        失败时降级保留 raw ASR，不阻塞 pipeline。
+        """
+        from .services.llm_subtitle_processor import LLMSubtitleProcessor
+
+        if len(transcript.segments) <= 10:
+            logger.info(f"[LLM Correction] {episode_id}: segments<=10, skip")
+            return
+
+        episode = await EpisodeRepository.get_by_id(episode_id) or {}
+        title = episode.get("title", "") or ""
+        description = episode.get("description", "") or ""
+
+        seg_dicts = [s.model_dump() for s in transcript.segments]
+        try:
+            corrected = await LLMSubtitleProcessor().correct_transcription(
+                segments=seg_dicts,
+                episode_title=title,
+                episode_description=description,
+            )
+        except Exception as e:  # noqa: BLE001 — 纠错失败降级保留 raw ASR
+            logger.warning(
+                f"[LLM Correction] {episode_id} failed: {e}; keeping raw ASR"
+            )
+            return
+
+        # 仅写回被纠错的段；失败/未变段保留原文
+        changed = 0
+        for seg, corr in zip(transcript.segments, corrected):
+            if corr.get("text_corrected") and corr.get("text_original"):
+                seg.text_original = corr["text_original"]
+                changed += 1
+        logger.info(
+            f"[LLM Correction] {episode_id}: {changed}/{len(transcript.segments)} segments updated"
+        )
+
+    async def _save_bundle(
+        self,
+        episode_id: str,
+        transcript: Optional[Transcript],
+        outline: Optional[Dict],
+        summaries: Optional[List],
+        highlight: Optional[Any],
+    ) -> None:
+        """线程池里跑 sync save_episode_bundle，避免阻塞 async event loop。
+
+        根因（database is locked，历史 32 次 episode 收尾失败）：save_episode_bundle
+        内部调 sync sqlite3 写。直接同步调用会阻塞 event loop，与 aiosqlite 后台
+        线程死锁——后台线程持写锁后，结果回调需 event loop 处理才能释放连接，而
+        event loop 已被阻塞，busy_timeout 30s 后抛 'database is locked'，
+        整集 rollback（所有 LLM 工作白费）。
+
+        asyncio.to_thread 把 sync 函数移到线程池，event loop 继续转，死锁条件消除。
+        配合远程已有的指数退避重试（d68dd83）+ 不回滚（2e563d2），三层防御。
+        """
+        await asyncio.to_thread(
+            save_episode_bundle,
+            episode_id,
+            self.data_dir,
+            transcript=transcript,
+            outline=outline,
+            summaries=summaries,
+            highlight=highlight,
+        )
 
     async def _clean_transcript(
         self,
@@ -908,6 +983,7 @@ class AudioProcessPipeline:
                 title=parse_result.title,
                 media_path=str(parse_result.audio_path),
                 language=parse_result.language,
+                description=parse_result.description,
             )
 
             await self._complete_stage(stages, "download", completed_stages, sync_stages)
@@ -1041,9 +1117,8 @@ class AudioProcessPipeline:
         # === 阶段 8: 持久化（与 _process_internal 342-372 对齐）===
         await self._add_stage(stages, "done", EpisodeStatus.READY, sync_stages)
 
-        save_episode_bundle(
+        await self._save_bundle(
             episode_id,
-            self.data_dir,
             transcript=transcript,
             outline={"entries": chapters},
             summaries=summaries,

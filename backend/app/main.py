@@ -211,14 +211,55 @@ def general_exception_handler(request, exc: Exception) -> JSONResponse:
 
 # ==================== 健康检查 ====================
 
-@app.get("/", response_model=HealthResponse)
-async def health():
-    """健康检查"""
-    return {
-        "name": "podcast-digester",
-        "version": settings.app_version,
-        "status": "healthy",
-    }
+# 健康检查 payload；桌面模式 `/` 让位给 SPA 首页，固定端点在 /api/health。
+_HEALTH_PAYLOAD = {
+    "name": "podcast-digester",
+    "version": settings.app_version,
+    "status": "healthy",
+}
+
+
+@app.get("/api/health", response_model=HealthResponse)
+async def api_health():
+    """健康检查（桌面端 Electron 轮询此端点；纯 API 模式同端点）"""
+    return dict(_HEALTH_PAYLOAD)
+
+
+# ==================== 桌面版 SPA 托管 ====================
+# 配置 PODCAST_DIGESTER_WEB_DIST 后，由后端直接托管前端构建产物，
+# Electron 只需 loadURL http://127.0.0.1:<port>。前端用相对路径 /api，零改动。
+# 所有 include_router 在本区块之前注册（line 更靠前），catch-all 不会抢 API 路由。
+_WEB_DIST = Path(os.environ["PODCAST_DIGESTER_WEB_DIST"]) if os.getenv("PODCAST_DIGESTER_WEB_DIST") else None
+if _WEB_DIST is not None and not _WEB_DIST.is_dir():
+    logging.getLogger(__name__).warning(
+        f"PODCAST_DIGESTER_WEB_DIST={_WEB_DIST} 不存在或不是目录，SPA 托管已禁用"
+    )
+    _WEB_DIST = None
+
+if _WEB_DIST is None:
+    @app.get("/", response_model=HealthResponse)
+    async def health():
+        """健康检查（纯 API 模式：`/` 返回健康 JSON，向后兼容）"""
+        return dict(_HEALTH_PAYLOAD)
+else:
+    _web_assets = _WEB_DIST / "assets"
+    if _web_assets.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(_web_assets)), name="web-assets")
+
+    @app.get("/", include_in_schema=False)
+    async def spa_index():
+        return FileResponse(str(_WEB_DIST / "index.html"))
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def spa_fallback(full_path: str):
+        # API / 媒体 / fixtures 的未知路径必须 404，不能吞成 index.html
+        if full_path.split("/", 1)[0] in ("api", "media", "fixtures"):
+            raise HTTPException(status_code=404, detail="Not Found")
+        candidate = (_WEB_DIST / full_path).resolve()
+        # 防路径穿越：必须仍在 dist 目录内
+        if candidate.is_file() and str(candidate).startswith(str(_WEB_DIST.resolve())):
+            return FileResponse(str(candidate))
+        return FileResponse(str(_WEB_DIST / "index.html"))
 
 
 # ==================== 核心 API ====================

@@ -92,6 +92,16 @@ class Settings:
             "faster-whisper",
             "python.*worker.py"
         ]
+        # Worker 跨轮次重试：仅对 retryable=True 的异常（DownloadTemporaryError 等）生效。
+        # yt-dlp 内部已做 3-client × 10-fragment 重试（comma-join player_client），
+        # 能耗尽到 worker 这一层还抛 DownloadTemporaryError 的，多半是持续抽风
+        # （代理断流 / YouTube 短时限流），等一等再试有希望。
+        self.worker_max_download_retries = int(os.getenv(
+            "PODCAST_DIGESTER_WORKER_MAX_DOWNLOAD_RETRIES", "3"
+        ))
+        self.worker_retry_backoff = float(os.getenv(
+            "PODCAST_DIGESTER_WORKER_RETRY_BACKOFF", "10"
+        ))
 
         # ==================== 进程锁配置 ====================
         self.asr_lock_file = Path(os.getenv("PODCAST_DIGESTER_ASR_LOCK", "/tmp/podcast_asr.lock"))
@@ -114,6 +124,13 @@ class Settings:
         # product/technical/market insights verify + 每 domain top-k
         self.llm_insights_verify_enabled = os.getenv("PODCAST_DIGESTER_INSIGHTS_VERIFY_ENABLED", "true").lower() == "true"
         self.llm_insights_top_k = int(os.getenv("PODCAST_DIGESTER_INSIGHTS_TOP_K", "5"))
+
+        # ==================== 字幕 LLM 纠错（默认关）====================
+        # polish 前用 LLM 纠正 ASR 同音字/专有名词，用 title + description 当术语表。
+        # 每集 +~100s LLM 耗时和费用，故默认关闭；手动端点 /correct-transcript 不受影响。
+        self.llm_correct_transcript_enabled = os.getenv(
+            "PODCAST_DIGESTER_LLM_CORRECT_TRANSCRIPT", "false"
+        ).lower() == "true"
 
         # ==================== 性能和重试 ====================
         self.http_timeout_seconds = int(os.getenv("PODCAST_DIGESTER_HTTP_TIMEOUT", "30"))
@@ -302,6 +319,8 @@ DEFAULT_TEMPERATURE = settings.llm_default_temperature
 WORKER_POLL_INTERVAL_SECONDS = settings.worker_poll_interval_seconds
 WORKER_LOCK_FILE = settings.worker_lock_file
 PROCESS_CLEANUP_PATTERNS = settings.worker_process_cleanup_patterns
+WORKER_MAX_DOWNLOAD_RETRIES = settings.worker_max_download_retries
+WORKER_RETRY_BACKOFF = settings.worker_retry_backoff
 
 MAX_LLM_COST_USD = settings.max_llm_cost_usd
 MAX_EPISODE_HOURS = settings.max_episode_hours

@@ -1,0 +1,77 @@
+{
+  "name": "PodcastDigester",
+  "productName": "Podcast Digester",
+  "version": "1.0.0",
+  "description": "把任意播客/视频链接变成 5 分钟内可决策的结构化知识",
+  "main": "main.js",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "build:arm64": "electron-builder --mac --arm64",
+    "build:x64": "electron-builder --mac --x64",
+    "build:universal": "electron-builder --mac --universal"
+  },
+  "devDependencies": {
+    "electron": "^42.0.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.podcastdigester.app",
+    "productName": "Podcast Digester",
+    "directories": {
+      "output": "../release"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "logger.js",
+      "loading.html",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../dist/podcast-backend",
+        "to": "podcast-backend"
+      },
+      {
+        "from": "../frontend/dist",
+        "to": "web"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "icon": "build/icon.icns",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "minimumSystemVersion": "26.0",
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.inherit.plist",
+      "extendInfo": {
+        "LSMinimumSystemVersion": "26.0"
+      }
+    },
+    "dmg": {
+      "title": "Podcast Digester",
+      "window": {
+        "width": 540,
+        "height": 380
+      },
+      "contents": [
+        {
+          "x": 130,
+          "y": 190,
+          "type": "link",
+          "path": "/Applications"
+        },
+        {
+          "x": 410,
+          "y": 190,
+          "type": "file"
+        }
+      ]
+    },
+    "afterPack": "./afterPack.js"
+  }
+}

@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 from app.config import (
     WORKER_POLL_INTERVAL_SECONDS, WORKER_LOCK_FILE, PROCESS_CLEANUP_PATTERNS,
+    WORKER_MAX_DOWNLOAD_RETRIES, WORKER_RETRY_BACKOFF,
 )
 
 
@@ -255,12 +256,7 @@ class Worker:
                             )
                             logger.info(f"Successfully processed episode: {episode_id}")
                         except Exception as e:
-                            logger.error(f"Failed to process episode {episode_id}: {e}", exc_info=True)
-                            await EpisodeRepository.update_status(
-                                episode_id,
-                                "failed",
-                                error_msg=str(e)
-                            )
+                            await self._handle_episode_failure(episode_id, e)
 
                 # 等待下一次轮询
                 await asyncio.sleep(self.poll_interval)
@@ -268,6 +264,41 @@ class Worker:
             except Exception as e:
                 logger.error(f"Worker loop error: {e}")
                 await asyncio.sleep(self.poll_interval)
+
+    async def _handle_episode_failure(self, episode_id: str, exc: Exception) -> bool:
+        """处理单集处理异常（从 run() 抽出便于单测）。
+
+        - retryable 异常（DownloadTemporaryError 等）+ 配额未耗尽 → 指数退避后
+          回 pending，下轮 poll 重拾；返回 True。
+        - 永久错误（DownloadError 等）或配额耗尽 → 标 failed；返回 False。
+
+        Returns:
+            True 若已重排为 pending（重试中）；False 若已终态 failed。
+        """
+        from app.database import EpisodeRepository  # 与 run() 同：函数局部导入
+
+        if getattr(exc, "retryable", False):
+            retry_count = await EpisodeRepository.get_retry_count(episode_id)
+            if retry_count < WORKER_MAX_DOWNLOAD_RETRIES:
+                logger.warning(
+                    f"Episode {episode_id} transient failure, "
+                    f"will retry (attempt {retry_count + 1}/"
+                    f"{WORKER_MAX_DOWNLOAD_RETRIES}): {exc}"
+                )
+                # 退避阻塞当前轮——单用户自托管场景可接受；
+                # 给瞬时故障（代理断流 / YT 短时限流）时间消散。
+                await asyncio.sleep(WORKER_RETRY_BACKOFF * (2 ** retry_count))
+                await EpisodeRepository.update_status(
+                    episode_id, "pending", retry_count=retry_count + 1
+                )
+                return True
+            logger.error(
+                f"Episode {episode_id} exhausted "
+                f"{WORKER_MAX_DOWNLOAD_RETRIES} retries: {exc}"
+            )
+        logger.error(f"Failed to process episode {episode_id}: {exc}", exc_info=True)
+        await EpisodeRepository.update_status(episode_id, "failed", error_msg=str(exc))
+        return False
 
     def start(self):
         """启动 Worker（原子获取锁）"""

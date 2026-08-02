@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Optional, Callable, Any, Dict, List
 import re
 from ..utils.validation import sanitize_url
+from ..errors import DownloadTemporaryError, DownloadError
 from ..utils.cookie_helper import (
     find_cookies_txt,
     get_best_browser,
@@ -103,6 +104,39 @@ def _is_rate_limit_error(error_msg: str) -> bool:
     """检查错误是否为限流相关"""
     error_lower = error_msg.lower()
     return any(err.lower() in error_lower for err in RATE_LIMIT_ERRORS)
+
+
+# CDN 节点不可达 / 网络抖动关键词（yt-dlp stderr 文本匹配）。
+# 命中即视为临时性——换 client（comma-join 已覆盖）或等一会再试有希望恢复，
+# 故映射到 DownloadTemporaryError 让 worker 跨轮次重试。
+NODE_UNREACHABLE_PATTERNS = [
+    r"connection.*timed?\s*out",
+    r"operation timed out",
+    r"read timed out",
+    r"unexpected\s*eof",
+    r"eof.*violation",
+    r"connection refused",
+    r"connection reset",
+    r"temporarily unavailable",
+    r"no route to host",
+    r"network is unreachable",
+    r"unable to resolve",
+    r"failed to establish a connection",
+]
+
+
+def _classify_download_error(error_msg: str) -> str:
+    """把 yt-dlp stderr 文本分类为下载错误类型。
+
+    Returns:
+        "rate_limit" | "node_unreachable" | "permanent"
+    """
+    if _is_rate_limit_error(error_msg):
+        return "rate_limit"
+    error_lower = error_msg.lower()
+    if any(re.search(p, error_lower) for p in NODE_UNREACHABLE_PATTERNS):
+        return "node_unreachable"
+    return "permanent"
 
 
 def _build_opts(platform: str = None) -> Dict[str, Any]:
@@ -261,7 +295,13 @@ async def run_ytdlp(
 
     if process.returncode != 0:
         error_msg = stderr.decode() if stderr else "Unknown error"
-        raise RuntimeError(f"yt-dlp failed (exit code {process.returncode}): {error_msg}")
+        full_msg = f"yt-dlp failed (exit code {process.returncode}): {error_msg}"
+        # 分类：临时性（节点不可达 / 限流）→ DownloadTemporaryError，worker 可重试；
+        # 永久（URL 无效 / 视频删除 / 格式不支持）→ DownloadError，不重试。
+        err_type = _classify_download_error(error_msg)
+        if err_type in ("node_unreachable", "rate_limit"):
+            raise DownloadTemporaryError(full_msg)
+        raise DownloadError(full_msg)
 
     # 查找下载的文件（支持更多扩展名）
     for ext in [".m4a", ".mp3", ".mp4", ".webm", ".mkv", ".opus"]:

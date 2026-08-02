@@ -247,7 +247,8 @@ class EpisodeRepository:
     # 允许更新的字段白名单（防止SQL注入）
     _ALLOWED_UPDATE_FIELDS = {
         "title", "title_zh", "status", "language", "media_path", "is_fixture",
-        "error_msg", "source_type", "last_activity_ts", "paragraph_mappings"
+        "error_msg", "source_type", "last_activity_ts", "paragraph_mappings",
+        "description", "retry_count",
     }
 
     @staticmethod
@@ -361,22 +362,46 @@ class EpisodeRepository:
                 return episodes
 
     @staticmethod
-    async def update_status(episode_id: str, status: str, error_msg: Optional[str] = None) -> None:
+    async def update_status(
+        episode_id: str,
+        status: str,
+        error_msg: Optional[str] = None,
+        retry_count: Optional[int] = None,
+    ) -> None:
         async with _connect() as db:
             now = datetime.now().isoformat()
+            # 动态拼 SET 子句：列名都是字面量（非用户输入），参数走 ? 绑定，无注入风险。
+            sets = ["status = ?", "updated_at = ?"]
+            params: list = [status, now]
             if error_msg:
-                await db.execute("""
-                    UPDATE episode SET status = ?, error_msg = ?, updated_at = ?
-                    WHERE id = ?
-                """, (status, error_msg, now, episode_id))
+                sets.append("error_msg = ?")
+                params.append(error_msg)
             else:
                 # 不带 error_msg ⇒ 成功/中性状态，显式清空残留错误，
                 # 否则先失败后成功的 episode 在 status=ready 时仍显示旧错误文本。
-                await db.execute("""
-                    UPDATE episode SET status = ?, error_msg = NULL, updated_at = ?
-                    WHERE id = ?
-                """, (status, now, episode_id))
+                sets.append("error_msg = NULL")
+            if retry_count is not None:
+                sets.append("retry_count = ?")
+                params.append(retry_count)
+            params.append(episode_id)
+            await db.execute(
+                f"UPDATE episode SET {', '.join(sets)} WHERE id = ?",
+                tuple(params),
+            )
             await db.commit()
+
+    @staticmethod
+    async def get_retry_count(episode_id: str) -> int:
+        """读取当前重试计数（未找到 / NULL → 0）。
+
+        worker 跨轮次重试据此判断是否还剩配额。
+        """
+        async with _connect() as db:
+            cur = await db.execute(
+                "SELECT retry_count FROM episode WHERE id = ?", (episode_id,)
+            )
+            row = await cur.fetchone()
+            return int(row[0]) if row and row[0] is not None else 0
 
     @staticmethod
     async def update(episode_id: str, **fields) -> bool:
