@@ -15,6 +15,7 @@ class ParseResult:
     source_type: str
     duration_ms: Optional[int] = None
     language: Optional[str] = None
+    description: Optional[str] = None
     extra: dict = None
 
     def __post_init__(self):

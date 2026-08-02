@@ -78,7 +78,8 @@ async def init_db():
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             last_activity_ts TEXT,
-            paragraph_mappings TEXT
+            paragraph_mappings TEXT,
+            retry_count INTEGER DEFAULT 0
         );
 
         -- 来源表
@@ -155,6 +156,23 @@ async def init_db():
         CREATE INDEX IF NOT EXISTS idx_cost_log_ts ON cost_log(ts DESC);
         """)
 
+        # migration: CREATE TABLE IF NOT EXISTS 不会给已存在的表补字段，
+        # 老库需要手动 ALTER 加 retry_count（下载重试计数，worker 跨轮次重试用）。
+        async with db.execute("PRAGMA table_info(episode)") as cursor:
+            existing_cols = await cursor.fetchall()
+        col_names = {col[1] for col in existing_cols}
+        if "retry_count" not in col_names:
+            await db.execute(
+                "ALTER TABLE episode ADD COLUMN retry_count INTEGER DEFAULT 0"
+            )
+            logger.info("Migration: added episode.retry_count column")
+        # description：YouTube 等视频简介，作为 LLM 字幕纠错的上下文术语表来源。
+        if "description" not in col_names:
+            await db.execute(
+                "ALTER TABLE episode ADD COLUMN description TEXT"
+            )
+            logger.info("Migration: added episode.description column")
+
         await db.commit()
 
 
@@ -179,7 +197,8 @@ class EpisodeRepository:
     # 允许更新的字段白名单（防止SQL注入）
     _ALLOWED_UPDATE_FIELDS = {
         "title", "title_zh", "status", "language", "media_path", "is_fixture",
-        "error_msg", "source_type", "last_activity_ts", "paragraph_mappings"
+        "error_msg", "source_type", "last_activity_ts", "paragraph_mappings",
+        "description",
     }
 
     @staticmethod
@@ -293,22 +312,55 @@ class EpisodeRepository:
                 return episodes
 
     @staticmethod
-    async def update_status(episode_id: str, status: str, error_msg: Optional[str] = None) -> None:
+    async def update_status(
+        episode_id: str,
+        status: str,
+        error_msg: Optional[str] = None,
+        retry_count: Optional[int] = None,
+    ) -> None:
+        """更新节目状态。
+
+        Args:
+            error_msg: 传入则写入错误信息；不传（None）则显式清空残留错误
+                       （保证先失败后成功的 episode 在 status=ready 时不挂旧错误）。
+            retry_count: 传入则同步更新重试计数；不传（None）则不动该字段。
+        """
         async with aiosqlite.connect(DB_PATH) as db:
             now = datetime.now().isoformat()
+            # 动态构建 SET：status 必更新；error_msg/retry_count 仅在显式传入时更新
+            set_parts = ["status = ?"]
+            params: List = [status]
             if error_msg:
-                await db.execute("""
-                    UPDATE episode SET status = ?, error_msg = ?, updated_at = ?
-                    WHERE id = ?
-                """, (status, error_msg, now, episode_id))
+                set_parts.append("error_msg = ?")
+                params.append(error_msg)
             else:
-                # 不带 error_msg ⇒ 成功/中性状态，显式清空残留错误，
-                # 否则先失败后成功的 episode 在 status=ready 时仍显示旧错误文本。
-                await db.execute("""
-                    UPDATE episode SET status = ?, error_msg = NULL, updated_at = ?
-                    WHERE id = ?
-                """, (status, now, episode_id))
+                set_parts.append("error_msg = NULL")
+            if retry_count is not None:
+                set_parts.append("retry_count = ?")
+                params.append(retry_count)
+            set_parts.append("updated_at = ?")
+            params.append(now)
+            params.append(episode_id)
+
+            await db.execute(
+                f"UPDATE episode SET {', '.join(set_parts)} WHERE id = ?",
+                params,
+            )
             await db.commit()
+
+    @staticmethod
+    async def get_retry_count(episode_id: str) -> int:
+        """获取当前下载重试次数（无记录或字段缺失返回 0）。"""
+        async with aiosqlite.connect(DB_PATH) as db:
+            try:
+                async with db.execute(
+                    "SELECT retry_count FROM episode WHERE id = ?", (episode_id,)
+                ) as cursor:
+                    row = await cursor.fetchone()
+                    return (row[0] or 0) if row else 0
+            except aiosqlite.OperationalError:
+                # 老库未 migrate（无 retry_count 列）；保守返回 0
+                return 0
 
     @staticmethod
     async def update(episode_id: str, **fields) -> bool:

@@ -7,7 +7,7 @@ from pathlib import Path
 from .base import BaseSourceParser, ParseResult
 from .ytdlp_runner import run_ytdlp, fetch_youtube_subtitles
 from ..utils.validation import validate_url, sanitize_url
-from ..utils.video import get_video_title
+from ..utils.video import get_video_title, get_video_description
 
 
 class YouTubeParser(BaseSourceParser):
@@ -54,14 +54,16 @@ class YouTubeParser(BaseSourceParser):
 
         transcript = await fetch_youtube_subtitles(url)
 
-        # 从 YouTube 获取标题
+        # 从 YouTube 获取标题和描述（描述作为 LLM 字幕纠错的上下文术语表来源）
         video_id = self._extract_video_id(url)
         title = await get_video_title(url, fallback_name=f"YouTube: {video_id}")
+        description = await get_video_description(url, platform="youtube")
 
         result = ParseResult(
             title=title,
             audio_path=audio_path,
             source_type="youtube",
+            description=description or None,
         )
 
         # 如果有字幕，放入 extra 跳过 ASR

@@ -1,31 +1,52 @@
 """
 PNG渲染器 - 使用Playwright将HTML转换为PNG长图
+
+playwright 为可选依赖（桌面打包版默认不包含，以控制体积）。
+顶层不 import，首次使用时懒加载；缺失时抛出带清晰指引的 RuntimeError，
+由路由层转换为 JSON 错误响应，而不是 ImportError 崩溃。
 """
-from playwright.async_api import async_playwright, Browser
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 import logging
 import asyncio
+
+if TYPE_CHECKING:
+    from playwright.async_api import Browser
 
 logger = logging.getLogger(__name__)
 
 # 全局浏览器实例（复用以提高性能）
-_browser: Optional[Browser] = None
+_browser: Optional["Browser"] = None
 _browser_lock = asyncio.Lock()
 
 
-async def _get_browser() -> Browser:
+def _require_playwright():
+    """懒加载 playwright；缺失时给出用户可理解的错误。"""
+    try:
+        from playwright.async_api import async_playwright
+    except ImportError as e:
+        raise RuntimeError(
+            "PNG 导出依赖 Playwright，当前安装未包含该组件。"
+            "开发环境请执行：pip install playwright && playwright install chromium"
+        ) from e
+    return async_playwright
+
+
+async def _get_browser() -> "Browser":
     """获取或创建浏览器实例"""
     global _browser
 
     async with _browser_lock:
         if _browser is None:
             try:
+                async_playwright = _require_playwright()
                 playwright = await async_playwright().start()
                 _browser = await playwright.chromium.launch(
                     args=['--no-sandbox', '--disable-setuid-sandbox']
                 )
                 logger.info("Browser instance created")
+            except RuntimeError:
+                raise
             except Exception as e:
                 logger.error(f"Failed to launch browser: {e}")
                 raise RuntimeError(f"Browser launch failed: {e}")

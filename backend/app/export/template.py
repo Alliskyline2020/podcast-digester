@@ -139,6 +139,11 @@ def render_html_template(
             episode_data.get('product_insights') or {}
         )
 
+        # 处理完整字幕（仅在 include_transcript 时；取最佳文本字段 + 格式化时间戳）
+        transcript_list = _build_transcript_list(
+            episode_data.get('transcript') or [], include_transcript
+        )
+
         # 准备模板上下文
         context = {
             'title': episode.get('title', ''),
@@ -155,7 +160,7 @@ def render_html_template(
             'has_product_insights': len(product_insight_groups) > 0,
             'theme': theme,
             'include_transcript': include_transcript,
-            'transcript': episode_data.get('transcript', []),
+            'transcript': transcript_list,
             'date': episode.get('publish_date', ''),
             'duration_min': episode.get('duration_min', 0)
         }
@@ -267,3 +272,35 @@ def _build_product_insight_groups(pi_data: dict) -> list:
             # dict.items() 方法而非此 key，导致 for 循环报错
             groups.append({'icon': icon, 'label': label, 'insights': rendered})
     return groups
+
+
+def _build_transcript_list(raw_segments: list, include_transcript: bool) -> list:
+    """把 transcript.json 的 segments 加工成模板友好的 [{start_time, text}]。
+
+    - include_transcript=False → 直接返回 []（不渲染区块，也避免无谓处理）
+    - 文本优先级：text_zh > text_en > text_with_punct > text_original
+      （翻译优先；否则带标点原文，比 raw 更可读）
+    - 所有文本字段都空的段跳过，不渲染空行
+    """
+    if not include_transcript:
+        return []
+
+    rendered = []
+    for seg in raw_segments:
+        if not isinstance(seg, dict):
+            continue
+        text = ''
+        for key in ('text_zh', 'text_en', 'text_with_punct', 'text_original'):
+            v = seg.get(key)
+            if v and isinstance(v, str) and v.strip():
+                text = v.strip()
+                break
+        if not text:
+            continue
+        start_ms = seg.get('start_ms') or 0
+        seconds = start_ms // 1000
+        rendered.append({
+            'start_time': f"{seconds // 60:02d}:{seconds % 60:02d}",
+            'text': text,
+        })
+    return rendered

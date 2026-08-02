@@ -366,6 +366,45 @@
                 font-size: 24px;
             }
         }
+
+        /* ===== Full transcript ===== */
+        .transcript-section {
+            border-top: 2px solid var(--border);
+            padding-top: 30px;
+            margin-top: 30px;
+        }
+
+        .transcript-section h2 {
+            margin-bottom: 20px;
+        }
+
+        .transcript-segment {
+            display: flex;
+            gap: 12px;
+            padding: 10px 0;
+            border-bottom: 1px dashed var(--border);
+            align-items: flex-start;
+        }
+
+        .transcript-segment:last-child {
+            border-bottom: none;
+        }
+
+        .transcript-segment .time {
+            flex-shrink: 0;
+            min-width: 56px;
+            font-size: 13px;
+            color: var(--text-secondary);
+            font-variant-numeric: tabular-nums;
+            padding-top: 2px;
+        }
+
+        .transcript-segment .text {
+            flex: 1;
+            margin: 0;
+            line-height: 1.7;
+            color: var(--text-primary);
+        }
     </style>
 </head>
 <body data-theme="{{ theme }}">
@@ -456,6 +495,18 @@
                     </div>
                     {% endfor %}
                 </div>
+            </div>
+            {% endfor %}
+        </section>
+        {% endif %}
+
+        {% if include_transcript and transcript %}
+        <section class="section transcript-section">
+            <h2>完整字幕</h2>
+            {% for seg in transcript %}
+            <div class="transcript-segment">
+                <span class="time">⏱ {{ seg.start_time }}</span>
+                <p class="text">{{ seg.text }}</p>
             </div>
             {% endfor %}
         </section>

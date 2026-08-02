@@ -62,11 +62,8 @@ async def export_episode_summary(
 
     # 回退：transcript.json 的 meta（旧路径，无 DB 记录时）
     transcript_file = media_dir / "transcript.json"
-    episode_meta = {}
-    if transcript_file.exists():
-        transcript_data = safe_read_json(transcript_file)
-        if transcript_data:
-            episode_meta = transcript_data.get('meta', {})
+    transcript_data = safe_read_json(transcript_file) if transcript_file.exists() else None
+    episode_meta = (transcript_data or {}).get('meta') or {}
 
     db_title = (db_episode or {}).get('title') or ''
     # 构造episode对象：标题优先用 DB（处理后真实标题），其次 transcript meta，最后 episode_id
@@ -118,13 +115,21 @@ async def export_episode_summary(
             logger.info("Loaded product_insights from product_insights.json")
 
     # 6. 准备导出数据
+    # 仅在请求「包含完整字幕」时加载 segments（避免无字幕导出无谓占内存/产物体积）
+    transcript_segments = []
+    if request.include_transcript and isinstance(transcript_data, dict):
+        segments = transcript_data.get('segments')
+        if isinstance(segments, list):
+            transcript_segments = segments
+            logger.info(f"Loaded {len(segments)} transcript segments (include_transcript=True)")
+
     export_data = {
         'episode': episode,
         'chapters': chapters or [],
         'summaries': summaries or [],
         'highlights': highlights,
         'product_insights': product_insights or {},
-        'transcript': []  # 暂时不包含完整字幕
+        'transcript': transcript_segments,
     }
 
     logger.info(f"Export data prepared: {len(export_data['chapters'])} chapters, {len(export_data['summaries'])} summaries, {len(export_data['highlights'])} highlights")
