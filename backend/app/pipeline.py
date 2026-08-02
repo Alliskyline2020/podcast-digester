@@ -36,6 +36,24 @@ from .services.glossary import get_glossary
 logger = logging.getLogger(__name__)
 
 
+# 断点续点的阶段→产物映射。阶段 N「已完成」= 产物文件存在 **且** 校验通过
+# （合法、非空 JSON）；崩溃半写 / 损坏的产物判未完成 → 该阶段重跑，消灭静默腐烂。
+# download 阶段无独立 JSON（产物是音频文件，由 transcript.json 间接判定：有 transcript
+# 必然下过载）；translate 阶段无独立产物（结果就地写回 transcript.json，由
+# transcript.segments[].text_translated 比例判定，见 _resume_internal）。
+_STAGE_ARTIFACTS: Dict[str, str] = {
+    "transcribe": "transcript.json",
+    "chapterize": "outline.json",
+    "summarize": "summaries.json",
+    "highlight": "highlight.json",
+    "product_insights": "product_insights.json",
+}
+
+# mid-state 状态集合：worker 在这些状态下的 episode 若被发现于 poll，必然是上次
+# 进程崩溃留下的孤儿（worker 串行单例，poll 期间不处理任何任务）→ 重置 pending 续跑。
+_MID_PROCESS_STATUSES = ("downloading", "asr_running", "llm_running")
+
+
 class AudioProcessPipeline:
     """音频处理管道（8阶段处理流程）
 
@@ -148,12 +166,15 @@ class AudioProcessPipeline:
         save_episode_bundle 只在最后阶段 8 一次性写入并把 status 翻成 ready，
         中途崩溃会丢失所有产物；而 product_insights 等阶段需要读前面的 JSON。
         所以每个阶段完成后单独写一份，保证后续阶段可读 + 崩溃可恢复。
+
+        用 atomic_write_json（临时文件 + rename）：直接 open('w') 在写中途崩溃
+        会留下截断的半 JSON，下游 json.load 抛错且被 _check_existing_files 判
+        「未完成」触发整阶段重跑——原子写从源头避免这类损坏。
         """
-        import json
+        from .utils.io import atomic_write_json
         media_dir = self.data_dir / "media" / episode_id
         media_dir.mkdir(parents=True, exist_ok=True)
-        with open(media_dir / filename, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        atomic_write_json(media_dir / filename, data, ensure_ascii=False, indent=2)
         logger.info(f"[checkpoint] {filename} saved for {episode_id}")
 
     async def _process_internal(
@@ -802,18 +823,50 @@ class AudioProcessPipeline:
         return False
 
     def _check_existing_files(self, episode_id: str) -> dict:
-        """检查已存在的文件，确定哪些阶段已完成
+        """检查已存在的产物，确定哪些阶段已完成（含完整性校验 + 级联失效）。
+
+        判定规则：
+        - 「阶段完成」= 产物存在 **且** 是合法非空 JSON（safe_read_json 非 None）。
+          崩溃半写 / 损坏的产物判未完成 → 阶段重跑，避免下游读到坏数据静默腐烂。
+        - **级联失效**：产物按流水线顺序前后派生（transcript→outline→summaries
+          →highlight→product_insights）。一旦某阶段产物无效，其后所有派生阶段
+          一并判无效——否则会出现「重跑转录却跳过分章」这种基于旧分章的错位
+          续点。translate 无独立产物（就地改 transcript），不参与级联。
 
         Returns:
-            dict: {'transcript': bool, 'outline': bool, 'summaries': bool, 'highlight': bool}
+            dict: {'transcript','outline','summaries','highlight','product_insights'} → bool。
+            key 沿用产物简称（_resume_internal 既如此读），新增 product_insights。
         """
+        from .utils.io import safe_read_json
+
         media_dir = self.data_dir / "media" / episode_id
-        return {
-            'transcript': (media_dir / "transcript.json").exists(),
-            'outline': (media_dir / "outline.json").exists(),
-            'summaries': (media_dir / "summaries.json").exists(),
-            'highlight': (media_dir / "highlight.json").exists(),
-        }
+        # 流水线顺序（级联以此为准）
+        ordered = [
+            ("transcript", "transcript.json"),
+            ("outline", "outline.json"),
+            ("summaries", "summaries.json"),
+            ("highlight", "highlight.json"),
+            ("product_insights", "product_insights.json"),
+        ]
+        result = {key: False for key, _ in ordered}
+        invalidated_from = False  # 一旦 True，后续全部判 False
+        for key, filename in ordered:
+            if invalidated_from:
+                continue
+            path = media_dir / filename
+            if not path.exists():
+                # 缺失即断点：本阶段及之后都没完成
+                invalidated_from = True
+                continue
+            if safe_read_json(path) is None:
+                logger.warning(
+                    f"[resume] {episode_id} 损坏的 checkpoint {filename}，"
+                    f"判阶段未完成并将级联失效下游"
+                )
+                invalidated_from = True
+                continue
+            result[key] = True
+        return result
 
     async def _load_intermediate_results(self, episode_id: str) -> dict:
         """加载中间结果用于恢复处理
@@ -951,6 +1004,8 @@ class AudioProcessPipeline:
             completed_stages.append('summarize')
         if existing['highlight']:
             completed_stages.extend(['translate', 'highlight'])
+        if existing['product_insights']:
+            completed_stages.append('product_insights')
 
         raw_input = validated_input
         transcript = intermediate.get('transcript')
@@ -978,12 +1033,22 @@ class AudioProcessPipeline:
 
             parse_result = await parser.parse(raw_input, episode_id, media_dir, download_progress)
 
+            # 与 _process_internal 对齐：下载重跑也翻新标题 + 译 title_zh。
+            # 早期 resume 路径只更新 title/media_path/language/description，漏了
+            # title_zh——崩溃在下载后、转录前时，标题中译会永远缺失。
+            title_zh = await self._translate_title(parse_result.title)
+
             await EpisodeRepository.update(
                 episode_id,
                 title=parse_result.title,
+                title_zh=title_zh,
                 media_path=str(parse_result.audio_path),
                 language=parse_result.language,
                 description=parse_result.description,
+            )
+
+            await self._save_audio_to_library(
+                parse_result.audio_path, title_zh, parse_result.title
             )
 
             await self._complete_stage(stages, "download", completed_stages, sync_stages)
@@ -1101,18 +1166,28 @@ class AudioProcessPipeline:
             )
             highlight = HighlightCard(**highlight_data) if highlight_data else None
 
-        # === 阶段 7: 产品和技术洞察（与 _process_internal 332-340 对齐）===
-        # 此前 resume 路径完全没有这一阶段，导致走 resume 端点的 episode 永远缺
-        # product_insights。它内部会读 highlight.json（上一阶段已保证写盘）+ 自写
-        # product_insights.json。
-        await self._add_stage(stages, "product_insights", EpisodeStatus.LLM_RUNNING, sync_stages)
+        # === 阶段 7: 产品和技术洞察（按 checkpoint 跳过）===
+        # product_insights.json 存在且校验通过 → 复用 checkpoint，不再调 LLM；
+        # 否则跑 run_product_insights_stage（它内部读 highlight.json + 自写
+        # product_insights.json）。早期 resume 路径无条件重跑本阶段，浪费配额。
+        if not existing['product_insights']:
+            await self._add_stage(stages, "product_insights", EpisodeStatus.LLM_RUNNING, sync_stages)
 
-        product_insights = await run_product_insights_stage(
-            episode_id,
-            self.data_dir,
-            progress_cb=self._make_db_progress_cb(stages, "product_insights", episode_id),
-        )
-        await self._complete_stage(stages, "product_insights", completed_stages, sync_stages)
+            product_insights = await run_product_insights_stage(
+                episode_id,
+                self.data_dir,
+                progress_cb=self._make_db_progress_cb(stages, "product_insights", episode_id),
+            )
+            await self._complete_stage(stages, "product_insights", completed_stages, sync_stages)
+        else:
+            logger.info(f"Product insights already exist for {episode_id}")
+            from .models import ProductInsights
+            from .utils.io import safe_read_json
+            pi_data = safe_read_json(
+                self.data_dir / "media" / episode_id / "product_insights.json"
+            )
+            product_insights = ProductInsights(**pi_data) if pi_data else None
+            completed_stages.append('product_insights')
 
         # === 阶段 8: 持久化（与 _process_internal 342-372 对齐）===
         await self._add_stage(stages, "done", EpisodeStatus.READY, sync_stages)

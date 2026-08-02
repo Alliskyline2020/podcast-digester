@@ -107,14 +107,15 @@ def _patch_resume_env(monkeypatch, *, highlight_return, capture):
 async def test_resume_writes_highlight_runs_product_insights_and_saves(
     monkeypatch, temp_data_dir
 ):
-    """existing={transcript,outline,summaries:True, highlight:False} —— 正是
-    ep_1783401350118 命中的场景。resume 必须补齐 highlight + product_insights。"""
+    """existing={transcript,outline,summaries:True, highlight:False, product_insights:False}
+    —— 正是 ep_1783401350118 命中的场景。resume 必须补齐 highlight + product_insights。"""
     highlight_model = _FakeModel({"tldr_zh": "测试亮点"})
     capture: dict = {}
     _patch_resume_env(monkeypatch, highlight_return=highlight_model, capture=capture)
 
     pipe = AudioProcessPipeline(temp_data_dir)
-    existing = {"transcript": True, "outline": True, "summaries": True, "highlight": False}
+    existing = {"transcript": True, "outline": True, "summaries": True,
+                "highlight": False, "product_insights": False}
     intermediate = {
         "transcript": _transcript(),
         "chapters": [{"index": 0, "title_zh": "第一章", "start_segment_id": 0,
@@ -174,7 +175,8 @@ async def test_resume_reuses_existing_highlight_but_still_runs_product_insights(
     )
 
     pipe = AudioProcessPipeline(temp_data_dir)
-    existing = {"transcript": True, "outline": True, "summaries": True, "highlight": True}
+    existing = {"transcript": True, "outline": True, "summaries": True,
+                "highlight": True, "product_insights": False}
     intermediate = {
         "transcript": _transcript(),
         "chapters": [{"index": 0, "title_zh": "第一章", "start_segment_id": 0,
@@ -189,7 +191,7 @@ async def test_resume_reuses_existing_highlight_but_still_runs_product_insights(
     # highlight 未重算
     assert "extract_highlights" not in capture, "已存在 highlight 不应重算"
 
-    # product_insights 仍跑（resume 此前即便 highlight 在也从不跑这一阶段）
+    # product_insights 仍跑（product_insights.json 未完成 → 跑）
     assert "run_product_insights_stage" in capture
 
     # save 收到的是从 checkpoint 复用的 highlight，不是 None
@@ -197,3 +199,94 @@ async def test_resume_reuses_existing_highlight_but_still_runs_product_insights(
         "复用分支没加载 highlight，save 收到 None"
     )
     assert capture["save"]["highlight"].model_dump()["tldr_zh"] == "已存在的亮点"
+
+
+@pytest.mark.unit
+async def test_resume_skips_product_insights_when_checkpoint_exists(
+    monkeypatch, temp_data_dir
+):
+    """existing.product_insights=True（product_insights.json 已存在且校验通过）：
+    resume 应复用 checkpoint，**不**再调 run_product_insights_stage（省 LLM 配额）。"""
+    media_dir = temp_data_dir / "media" / "ep_pi"
+    media_dir.mkdir(parents=True, exist_ok=True)
+    (media_dir / "highlight.json").write_text(json.dumps({
+        "tldr_zh": "亮点", "worth_listening_verdict": "skim_outline",
+        "verdict_confidence": "high", "target_audience_zh": "受众",
+    }, ensure_ascii=False))
+    (media_dir / "product_insights.json").write_text(json.dumps(
+        {"product": {"items": []}}, ensure_ascii=False
+    ))
+
+    capture: dict = {}
+    _patch_resume_env(
+        monkeypatch, highlight_return=_FakeModel({"tldr_zh": "不应重算"}), capture=capture
+    )
+
+    pipe = AudioProcessPipeline(temp_data_dir)
+    existing = {"transcript": True, "outline": True, "summaries": True,
+                "highlight": True, "product_insights": True}
+    intermediate = {
+        "transcript": _transcript(),
+        "chapters": [{"index": 0, "title_zh": "第一章", "start_segment_id": 0,
+                      "end_segment_id": 1, "start_ms": 0, "end_ms": 120000}],
+        "summaries": [{"title_zh": "第一章", "summary": "概要"}],
+    }
+
+    await pipe._resume_internal(
+        "ep_pi", "https://example.com/x", lambda *a: None, existing, intermediate
+    )
+
+    # product_insights 未重算（checkpoint 复用）
+    assert "run_product_insights_stage" not in capture, (
+        "product_insights.json 已存在不应重算，浪费 LLM 配额"
+    )
+    # save 仍拿到 highlight，且 ProductInsightsRepository 收到复用的产物
+    assert capture["save"]["highlight"] is not None
+    assert "ProductInsightsRepository" in capture.get("repo_set", {}), (
+        "复用的 product_insights 仍应写入 DB repo"
+    )
+
+
+@pytest.mark.unit
+async def test_resume_cascade_invalidates_downstream_when_transcript_corrupt(
+    monkeypatch, temp_data_dir
+):
+    """transcript.json 损坏 → 级联失效：outline/summaries/highlight/product_insights
+    一并判未完成（否则会基于旧分章错位续点）。直接测 _check_existing_files。"""
+    media_dir = temp_data_dir / "media" / "ep_cascade"
+    media_dir.mkdir(parents=True, exist_ok=True)
+    # transcript 损坏，其余都合法
+    (media_dir / "transcript.json").write_text("{not valid json")
+    (media_dir / "outline.json").write_text(json.dumps({"entries": []}))
+    (media_dir / "summaries.json").write_text(json.dumps([]))
+    (media_dir / "highlight.json").write_text(json.dumps({"tldr_zh": "x"}))
+    (media_dir / "product_insights.json").write_text(json.dumps({"product": {"items": []}}))
+
+    pipe = AudioProcessPipeline(temp_data_dir)
+    existing = pipe._check_existing_files("ep_cascade")
+
+    # transcript 损坏 → 自 False 起，后续全部级联失效
+    assert existing == {
+        "transcript": False, "outline": False, "summaries": False,
+        "highlight": False, "product_insights": False,
+    }, f"transcript 损坏应级联失效所有下游，实际 {existing}"
+
+
+@pytest.mark.unit
+async def test_check_existing_files_validates_and_cascades(temp_data_dir):
+    """_check_existing_files 的完整性校验 + 级联：合法产物标 True，
+    中途缺失/损坏即断，其后全 False。"""
+    media_dir = temp_data_dir / "media" / "ep_chk"
+    media_dir.mkdir(parents=True, exist_ok=True)
+    # transcript + outline 合法，summaries 之后缺失
+    (media_dir / "transcript.json").write_text(json.dumps({"segments": []}))
+    (media_dir / "outline.json").write_text(json.dumps({"entries": []}))
+    # 不写 summaries/highlight/product_insights
+
+    pipe = AudioProcessPipeline(temp_data_dir)
+    existing = pipe._check_existing_files("ep_chk")
+
+    assert existing == {
+        "transcript": True, "outline": True, "summaries": False,
+        "highlight": False, "product_insights": False,
+    }, f"summaries 缺失应级联失效其后，实际 {existing}"
