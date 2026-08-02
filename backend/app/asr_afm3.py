@@ -24,7 +24,12 @@ from .models import Transcript, Segment
 logger = logging.getLogger(__name__)
 
 # Swift桥接工具路径（编译后的可执行文件）
-BRIDGE_TOOL = Path(__file__).parent / "speech_analyzer_bridge"
+# 桌面打包（PyInstaller）模式下模块被打进 PYZ，__file__ 不可用于定位磁盘文件，
+# 统一从 sys._MEIPASS（onedir 的 _internal 目录）解析。
+if getattr(sys, "frozen", False):
+    BRIDGE_TOOL = Path(sys._MEIPASS) / "app" / "speech_analyzer_bridge"  # type: ignore[attr-defined]
+else:
+    BRIDGE_TOOL = Path(__file__).parent / "speech_analyzer_bridge"
 
 
 class AppleASR:
