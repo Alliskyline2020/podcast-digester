@@ -171,3 +171,97 @@ async def test_worker_mid_state_requeue_runs_before_pending_processing(monkeypat
     assert mid_idx < pend_resume_idx, (
         f"自愈应先于 pending 处理，实际顺序 {order}"
     )
+
+
+# ---------- Phase 3：ASRError/LLMError(retryable=True) 接通 worker 跨轮次重试 ----------
+#
+# pipeline 现在把 ASR/LLM 失败包成 ASRError/LLMError（retryable=True）。这里验证
+# worker._handle_episode_failure 收到这类异常时：配额内 → 退避 + 回 pending（重试）；
+# 收到非可重试异常（裸 RuntimeError）→ 直接 failed。这是"第 N 步崩溃能恢复"的
+# 最后一环：错误分类 → worker 退避重试 → 下轮 poll 按 checkpoint 续点。
+
+async def test_worker_retries_when_resume_raises_retryable_asr_error(monkeypatch):
+    """resume_episode 抛 ASRError(retryable=True) → 退避 + 回 pending（attempt 递增）。"""
+    from app.errors import ASRError
+
+    w = worker.Worker()
+    updates = []
+
+    async def fake_get_retry_count(eid):
+        return 0  # 第一次失败
+
+    async def fake_update_status(eid, status, error_msg=None, retry_count=None):
+        updates.append((status, retry_count))
+
+    monkeypatch.setattr(app_database.EpisodeRepository, "get_retry_count", staticmethod(fake_get_retry_count))
+    monkeypatch.setattr(app_database.EpisodeRepository, "update_status", staticmethod(fake_update_status))
+    # 退避sleep 不真正等待
+    slept = []
+
+    async def fake_sleep(s):
+        slept.append(s)
+
+    monkeypatch.setattr(worker.asyncio, "sleep", fake_sleep)
+
+    result = await w._handle_episode_failure("ep_x", ASRError("ASR 超时"))
+
+    assert result is True, "retryable + 配额内 → 应回 pending（返回 True）"
+    assert updates == [("pending", 1)], f"应退避后回 pending 且 retry_count+1，实际 {updates}"
+    assert slept, "应执行退避 sleep"
+
+
+async def test_worker_marks_failed_when_resume_raises_non_retryable(monkeypatch):
+    """resume_episode 抛裸 RuntimeError（无 retryable）→ 直接 failed，不重试。"""
+    w = worker.Worker()
+    updates = []
+
+    async def fake_get_retry_count(eid):
+        return 0
+
+    async def fake_update_status(eid, status, error_msg=None, retry_count=None):
+        updates.append((status, error_msg))
+
+    monkeypatch.setattr(app_database.EpisodeRepository, "get_retry_count", staticmethod(fake_get_retry_count))
+    monkeypatch.setattr(app_database.EpisodeRepository, "update_status", staticmethod(fake_update_status))
+    slept = []
+
+    async def fake_sleep(s):
+        slept.append(s)
+
+    monkeypatch.setattr(worker.asyncio, "sleep", fake_sleep)
+
+    result = await w._handle_episode_failure("ep_y", RuntimeError("Apple AFM 3 only available on macOS 26+"))
+
+    assert result is False, "非 retryable → 应终态 failed（返回 False）"
+    assert any(s == "failed" for s, _ in updates), f"应置 failed，实际 {updates}"
+    assert not slept, "永久错不应退避 sleep"
+
+
+async def test_worker_marks_failed_when_retry_exhausted(monkeypatch):
+    """retryable 但配额耗尽（retry_count 已达上限）→ 终态 failed，不再退避。"""
+    from app.errors import LLMError
+
+    w = worker.Worker()
+    updates = []
+
+    async def fake_get_retry_count(eid):
+        from app.config import WORKER_MAX_DOWNLOAD_RETRIES
+        return WORKER_MAX_DOWNLOAD_RETRIES  # 已耗尽
+
+    async def fake_update_status(eid, status, error_msg=None, retry_count=None):
+        updates.append(status)
+
+    monkeypatch.setattr(app_database.EpisodeRepository, "get_retry_count", staticmethod(fake_get_retry_count))
+    monkeypatch.setattr(app_database.EpisodeRepository, "update_status", staticmethod(fake_update_status))
+    slept = []
+
+    async def fake_sleep(s):
+        slept.append(s)
+
+    monkeypatch.setattr(worker.asyncio, "sleep", fake_sleep)
+
+    result = await w._handle_episode_failure("ep_z", LLMError("429 持续"))
+
+    assert result is False, "配额耗尽 → 应终态 failed"
+    assert "failed" in updates
+    assert not slept, "配额耗尽不应退避"

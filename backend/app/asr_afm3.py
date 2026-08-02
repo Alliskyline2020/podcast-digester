@@ -20,6 +20,7 @@ import time
 from pathlib import Path
 from typing import Optional, Callable
 from .models import Transcript, Segment
+from .errors import ASRError
 
 logger = logging.getLogger(__name__)
 
@@ -262,11 +263,20 @@ async def run_asr(
     logger.info(f"   探测语种: {locale}")
 
     # 用选中的 locale 跑完整音频（只跑一次）
-    transcript = await asr.transcribe(
-        audio_path,
-        language=locale,
-        on_progress=on_progress
-    )
+    try:
+        transcript = await asr.transcribe(
+            audio_path,
+            language=locale,
+            on_progress=on_progress
+        )
+    except RuntimeError as e:
+        # transcribe() 运行期失败（进程非零退出 / 空结果 / 超 2 小时超时）统一抛
+        # ASRError(retryable=True)，让 worker._handle_episode_failure 跨轮次退避重试——
+        # 覆盖"第 N 步崩溃后真能恢复"。构造期 RuntimeError（macOS 版本 / 桥接工具缺失）
+        # 在 get_apple_asr() 阶段抛出，不会走到这里，原样上抛 → worker 判永久 failed（合理）。
+        raise ASRError(
+            f"Apple ASR 转录失败: {e}", audio_file=str(audio_path)
+        ) from e
 
     logger.info(f"✅ 转录完成: {len(transcript.segments)} segments")
 

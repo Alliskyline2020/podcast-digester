@@ -6,6 +6,7 @@ import asyncio
 import logging
 
 from ..config import MAX_RETRIES, BASE_DELAY, MAX_DELAY
+from ..errors import PodcastError, LLMError
 from .config import get_config, LLMConfig
 from .protocols import LLMResponse, OpenAIAdapter, AnthropicAdapter
 
@@ -38,28 +39,43 @@ async def _retry_with_backoff(func, *, retry_on_json: bool = False, retry_api: b
 
     retry_on_json=True 时也重试 json.JSONDecodeError（供 chat_json 包住 parse 用）。
     retry_api=False 时跳过 API 错误重试（避免与 complete() 内部重试嵌套）。
+
+    可重试错误耗尽内部重试后，统一包成 LLMError(retryable=True) 上抛——让
+    worker._handle_episode_failure 跨轮次退避重试（覆盖"第 N 步 LLM 失败能恢复"）。
+    非可重试错误（401 鉴权 / 403 / 404 模型不存在）原样上抛 → worker 判永久 failed。
+    已是 PodcastError（如 CostLimitError 永久错、或下层 complete() 已包过的 LLMError）
+    原样上抛，不二次包装。
     """
     import json  # 局部导入，避免非 JSON 路径强依赖
-    last_error = None
+    last_error: Exception | None = None
     for attempt in range(MAX_RETRIES + 1):
         try:
             return await func()
         except json.JSONDecodeError as e:
             last_error = e
             if not retry_on_json or attempt >= MAX_RETRIES:
-                raise
+                raise LLMError(
+                    f"LLM 返回非法 JSON（重试 {attempt} 次仍失败）: {e}"
+                ) from e
             await asyncio.sleep(0.1 * (attempt + 1))
             continue
         except Exception as e:
             last_error = e
             if not retry_api or not _is_retryable(e) or attempt >= MAX_RETRIES:
-                raise
+                if isinstance(e, PodcastError):
+                    raise  # 已分类（LLMError / CostLimitError 等），保留原语义
+                if _is_retryable(e):
+                    raise LLMError(
+                        f"LLM 调用失败（已内部重试 {attempt} 次）: {e}"
+                    ) from e
+                raise  # 401/403/404 等永久错：原样抛 → worker 判 failed
             delay = min(BASE_DELAY * (2 ** attempt), MAX_DELAY)
             if "429" in str(e).lower():
                 delay = min(delay * 2, MAX_DELAY)
             logger.warning(f"LLM 可重试错误 (第 {attempt + 1}/{MAX_RETRIES + 1} 次): {e}，{delay:.1f}s 后重试")
             await asyncio.sleep(delay)
-    raise last_error
+    # 理论不可达（循环内必 return 或 raise）；兜底也包 LLMError。
+    raise LLMError(f"LLM 调用失败: {last_error}") from last_error
 
 
 async def complete(

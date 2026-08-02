@@ -24,7 +24,9 @@ from app.asr_afm3 import (
     _probe_audio_language,
     _probe_window,
     probe_audio_language_detailed,
+    run_asr,
 )
+from app.errors import ASRError
 from app.models import Segment
 
 
@@ -406,3 +408,57 @@ class TestBackwardCompatibility:
         result = await _probe_audio_language(tmp_path / "audio.m4a", asr)
         assert isinstance(result, str)
         assert result in ("en-US", "zh-CN")
+
+
+# ===========================================================================
+# Phase 3: run_asr wraps transcribe() RuntimeError → ASRError (retryable)
+# ===========================================================================
+#
+# worker._handle_episode_failure 用 getattr(exc, "retryable", False) 判定退避重试。
+# transcribe() 运行期失败（进程非零 / 空结果 / 超时）原本抛裸 RuntimeError（无
+# retryable）→ worker 直接判 failed。run_asr 现在统一包成 ASRError → 跨轮次重试，
+# 覆盖"第 N 步 ASR 崩溃能恢复"。构造期 RuntimeError（macOS 版本/桥接工具）在
+# get_apple_asr() 抛出，不在此路径，原样上抛。
+
+class TestRunAsrErrorClassification:
+    """run_asr 把 transcribe() 的运行期 RuntimeError 包成 ASRError(retryable=True)。"""
+
+    @pytest.mark.asyncio
+    async def test_run_asr_wraps_transcribe_runtime_error_as_asr_error(
+        self, monkeypatch, tmp_path
+    ):
+        import app.asr_afm3 as mod
+
+        class FlakyASR:
+            async def transcribe(self, audio_path, language=None, on_progress=None):
+                raise RuntimeError("❌ Apple ASR超时 (超过2小时)")
+
+        monkeypatch.setattr(mod, "get_apple_asr", lambda: FlakyASR())
+        # 跳过语种探测（聚焦 transcribe 包装；探测内部也调 transcribe 会先崩）
+        monkeypatch.setattr(
+            mod, "_probe_audio_language", AsyncMock(return_value="en-US")
+        )
+
+        with pytest.raises(ASRError) as exc_info:
+            await run_asr(tmp_path / "audio.m4a", on_progress=None)
+
+        assert exc_info.value.retryable is True
+        assert "Apple ASR超时" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_run_asr_wraps_empty_result_as_asr_error(self, monkeypatch, tmp_path):
+        import app.asr_afm3 as mod
+
+        class EmptyASR:
+            async def transcribe(self, audio_path, language=None, on_progress=None):
+                raise RuntimeError("❌ 转录结果为空")
+
+        monkeypatch.setattr(mod, "get_apple_asr", lambda: EmptyASR())
+        monkeypatch.setattr(
+            mod, "_probe_audio_language", AsyncMock(return_value="zh-CN")
+        )
+
+        with pytest.raises(ASRError) as exc_info:
+            await run_asr(tmp_path / "audio.m4a")
+
+        assert exc_info.value.retryable is True

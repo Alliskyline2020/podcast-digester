@@ -154,3 +154,81 @@ async def test_retry_with_backoff_retries_json_when_retry_on_json_true_and_retry
 
     assert result == {"ok": True}
     assert attempts["n"] == 3  # 前两次 JSONDecodeError，第三次成功
+
+
+# ---------- Phase 3：可重试错误耗尽后包 LLMError，接通 worker 跨轮次重试 ----------
+#
+# worker._handle_episode_failure 用 getattr(exc, "retryable", False) 判定是否退避重试。
+# 原本 complete() 耗尽内部重试后原样抛 openai/网络异常（无 retryable 属性）→ worker
+# 直接判 failed。这里验证：可重试错误耗尽 → LLMError(retryable=True)；永久错原样抛。
+
+@pytest.mark.asyncio
+async def test_retry_with_backoff_wraps_retryable_exhaustion_as_llm_error(monkeypatch):
+    """可重试错误（429）耗尽内部重试 → LLMError(retryable=True)，让 worker 跨轮次重试。"""
+    from app.errors import LLMError
+
+    async def always_429():
+        raise Exception("429 Too Many Requests")
+
+    monkeypatch.setattr(client_module, "BASE_DELAY", 0.0)
+    monkeypatch.setattr(client_module, "MAX_DELAY", 0.0)
+
+    with pytest.raises(LLMError) as exc_info:
+        await client_module._retry_with_backoff(always_429, retry_api=True)
+
+    assert exc_info.value.retryable is True
+    assert "429 Too Many Requests" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_retry_with_backoff_preserves_non_retryable_raw(monkeypatch):
+    """非可重试错误（401 鉴权）→ 原样抛（非 LLMError），worker 判永久 failed。"""
+    from app.errors import LLMError
+
+    async def always_401():
+        raise Exception("Invalid API key")
+
+    monkeypatch.setattr(client_module, "BASE_DELAY", 0.0)
+    monkeypatch.setattr(client_module, "MAX_DELAY", 0.0)
+
+    with pytest.raises(Exception, match="Invalid API key") as exc_info:
+        await client_module._retry_with_backoff(always_401, retry_api=True)
+
+    assert not isinstance(exc_info.value, LLMError), "401 不应被包成可重试 LLMError"
+
+
+@pytest.mark.asyncio
+async def test_retry_with_backoff_does_not_double_wrap_podcast_error(monkeypatch):
+    """下层 complete() 已抛 LLMError → 上层 _retry_with_backoff 原样上抛，不二次包装。"""
+    from app.errors import LLMError
+
+    inner = LLMError("LLM 调用失败（已内部重试 2 次）: 429", task="chapterize")
+
+    async def raises_llm_error():
+        raise inner
+
+    monkeypatch.setattr(client_module, "BASE_DELAY", 0.0)
+    monkeypatch.setattr(client_module, "MAX_DELAY", 0.0)
+
+    with pytest.raises(LLMError) as exc_info:
+        await client_module._retry_with_backoff(raises_llm_error, retry_api=False)
+
+    assert exc_info.value is inner, "应原样上抛同一 LLMError 实例，不重新包装"
+
+
+@pytest.mark.asyncio
+async def test_retry_with_backoff_wraps_json_exhaustion_as_llm_error(monkeypatch):
+    """JSON 重试耗尽 → LLMError(retryable=True)。模型偶发吐非法 JSON 应可跨轮次重试。"""
+    import json
+    from app.errors import LLMError
+
+    async def always_bad_json():
+        raise json.JSONDecodeError("bad json", "doc", 0)
+
+    monkeypatch.setattr(client_module, "BASE_DELAY", 0.0)
+    monkeypatch.setattr(client_module, "MAX_DELAY", 0.0)
+
+    with pytest.raises(LLMError) as exc_info:
+        await client_module._retry_with_backoff(always_bad_json, retry_on_json=True, retry_api=False)
+
+    assert exc_info.value.retryable is True
