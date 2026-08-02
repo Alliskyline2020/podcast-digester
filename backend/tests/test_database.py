@@ -298,3 +298,127 @@ class TestSyncDbBusyTimeout:
         with pytest.raises(sqlite3.OperationalError, match="no such table"):
             EpisodeRepositorySync.update_status_sync("ep_x", "ready")
         assert sleeps == [], "非锁错误不应触发重试退避"
+
+
+@pytest.mark.unit
+class TestSyncGetByIdDecodesJson:
+    """get_by_id_sync 必须和 async get_by_id 一样 json.loads(paragraph_mappings)。
+
+    episode 表把 paragraph_mappings 存成 JSON 字符串（TEXT）。async get_by_id /
+    list_all / search 都解码成 list，唯独 sync get_by_id_sync 历史上返回裸 dict(row)
+    → EpisodeManager.get_bundle → Episode(**data) 因 paragraph_mappings 是 str 而非
+    list 抛 ValidationError（Pydantic Optional[List[Dict]]）。离线/同步调用方拿不到
+    bundle。修在源头（sync getter），所有同步调用方一次性修复。
+    """
+
+    def test_get_by_id_sync_decodes_paragraph_mappings(self, monkeypatch, tmp_path):
+        import json
+        import app.database
+        from app.database import EpisodeRepositorySync, _sync_db
+
+        monkeypatch.setattr(app.database, "DB_PATH", tmp_path / "t.db")
+        payload = [{"id": 0, "start_ms": 120, "end_ms": 109200, "text": "hi"}]
+        with _sync_db() as db:
+            db.execute(
+                "CREATE TABLE episode (id TEXT PRIMARY KEY, paragraph_mappings TEXT)"
+            )
+            db.execute(
+                "INSERT INTO episode (id, paragraph_mappings) VALUES (?, ?)",
+                ("ep1", json.dumps(payload)),
+            )
+            db.commit()
+
+        data = EpisodeRepositorySync.get_by_id_sync("ep1")
+
+        assert data is not None
+        assert isinstance(data["paragraph_mappings"], list), (
+            "sync getter 应把 paragraph_mappings JSON 字符串解码成 list"
+        )
+        assert data["paragraph_mappings"] == payload
+
+    def test_get_by_id_sync_bad_paragraph_mappings_becomes_none(self, monkeypatch, tmp_path):
+        """损坏的 JSON 不抛错，降级为 None（与 async get_by_id 的 except 分支一致）。"""
+        import app.database
+        from app.database import EpisodeRepositorySync, _sync_db
+
+        monkeypatch.setattr(app.database, "DB_PATH", tmp_path / "t.db")
+        with _sync_db() as db:
+            db.execute(
+                "CREATE TABLE episode (id TEXT PRIMARY KEY, paragraph_mappings TEXT)"
+            )
+            db.execute(
+                "INSERT INTO episode (id, paragraph_mappings) VALUES (?, ?)",
+                ("ep1", "{not valid json"),
+            )
+            db.commit()
+
+        data = EpisodeRepositorySync.get_by_id_sync("ep1")
+
+        assert data is not None
+        assert data["paragraph_mappings"] is None, (
+            "损坏的 paragraph_mappings 应降级为 None，不让整次读取炸掉"
+        )
+
+    def test_get_by_id_sync_null_paragraph_mappings_stays_none(self, monkeypatch, tmp_path):
+        """NULL / 空 paragraph_mappings 保持 None，不误触发解码。"""
+        import app.database
+        from app.database import EpisodeRepositorySync, _sync_db
+
+        monkeypatch.setattr(app.database, "DB_PATH", tmp_path / "t.db")
+        with _sync_db() as db:
+            db.execute(
+                "CREATE TABLE episode (id TEXT PRIMARY KEY, paragraph_mappings TEXT)"
+            )
+            db.execute(
+                "INSERT INTO episode (id, paragraph_mappings) VALUES (?, ?)",
+                ("ep1", None),
+            )
+            db.commit()
+
+        data = EpisodeRepositorySync.get_by_id_sync("ep1")
+
+        assert data is not None
+        assert data["paragraph_mappings"] is None
+
+
+@pytest.mark.unit
+@pytest.mark.database
+class TestAsyncListGettersDecodeParagraphMappings:
+    """list_all / get_by_statuses / get_by_id 共用 _decode_paragraph_mappings：
+    解码 JSON，损坏降级 None —— 不让单条坏数据炸掉整列读取。
+
+    重构前 list_all / get_by_statuses 是裸 json.loads（无 try/except），一行坏
+    paragraph_mappings 会让整个 episode 列表 500。合并到防御性 helper 后两路径
+    与 get_by_id 行为一致。
+    """
+
+    async def test_list_all_decodes_and_survives_bad_json(self, temp_db):
+        import aiosqlite
+        from app import database as _db
+
+        now = datetime.now()
+        for ep_id in ("ep_good", "ep_bad"):
+            await EpisodeRepository.create({
+                "id": ep_id,
+                "title": f"T_{ep_id}",
+                "status": EpisodeStatus.READY.value,
+                "paragraph_mappings": [{"id": 0, "text": "seg"}],
+                "created_at": now,
+                "updated_at": now,
+            })
+        # 把 ep_bad 的 paragraph_mappings 改成损坏 JSON（绕过 create 的序列化）
+        async with aiosqlite.connect(str(_db.DB_PATH)) as db:
+            await db.execute(
+                "UPDATE episode SET paragraph_mappings = ? WHERE id = ?",
+                ("{not valid json", "ep_bad"),
+            )
+            await db.commit()
+
+        episodes = await EpisodeRepository.list_all()
+        by_id = {e["id"]: e for e in episodes}
+
+        assert len(episodes) == 2, "损坏行不应让整列读取炸掉"
+        assert by_id["ep_good"]["paragraph_mappings"] == [{"id": 0, "text": "seg"}]
+        assert by_id["ep_bad"]["paragraph_mappings"] is None, (
+            "损坏 JSON 应降级 None，与 get_by_id 一致"
+        )
