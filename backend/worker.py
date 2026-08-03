@@ -172,8 +172,14 @@ class Worker:
         单 owner 模型：API 只置状态、不跑 pipeline（resume 端点也只入队），
         故不存在 API/worker 抢同一集的竞态；mid-state 只能是 worker 自身崩溃残留。
         """
-        from app.database import EpisodeRepository, SourceRepository
+        from app.database import EpisodeRepository, SourceRepository, init_db
         from app.pipeline import pipeline as audio_pipeline
+
+        # 先确保 DB schema 就绪（幂等：init_db 走 CREATE IF NOT EXISTS + 迁移 runner）。
+        # worker 可能与 API 并发启动（launchd 独立 plist / 手动并行起）；若早于 API 的
+        # init_db() 完成就开始轮询，首轮查 episode 会 'no such table'（虽自愈，但留
+        # ERROR 噪音）。主动建表让 worker 可独立冷启，不依赖 API 进程。
+        await init_db()
 
         logger.info("Worker started")
 

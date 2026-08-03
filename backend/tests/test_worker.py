@@ -173,6 +173,40 @@ async def test_worker_mid_state_requeue_runs_before_pending_processing(monkeypat
     )
 
 
+async def test_worker_ensures_db_schema_before_first_poll(monkeypatch):
+    """Regression: worker.run() 必须在首次轮询前 await init_db()。
+
+    worker 可能与 API 并发启动（launchd 独立 plist / 手动并行起）；若早于 API 的
+    init_db() 完成就开始轮询，首轮查 episode 会 'no such table: episode'（虽自愈，
+    但留 ERROR 噪音）。worker 主动建表后才能独立冷启，不依赖 API 进程。
+    """
+    w = worker.Worker()
+    order = []
+
+    async def fake_init_db():
+        order.append("init_db")
+
+    async def fake_get_by_statuses(statuses):
+        order.append(f"query:{statuses[0]}")
+        return []
+
+    async def fake_sleep(_seconds):
+        w.running = False  # 跑完一轮即退出
+
+    monkeypatch.setattr(app_database, "init_db", fake_init_db)
+    monkeypatch.setattr(app_database.EpisodeRepository, "get_by_statuses", staticmethod(fake_get_by_statuses))
+    monkeypatch.setattr(worker.asyncio, "sleep", fake_sleep)
+
+    w.running = True
+    await w.run()
+
+    assert "init_db" in order, f"worker.run() 应调用 init_db，实际顺序 {order}"
+    first_poll = next(i for i, x in enumerate(order) if x.startswith("query:"))
+    assert order.index("init_db") < first_poll, (
+        f"init_db 必须早于首次轮询查询，实际顺序 {order}"
+    )
+
+
 # ---------- Phase 3：ASRError/LLMError(retryable=True) 接通 worker 跨轮次重试 ----------
 #
 # pipeline 现在把 ASR/LLM 失败包成 ASRError/LLMError（retryable=True）。这里验证
