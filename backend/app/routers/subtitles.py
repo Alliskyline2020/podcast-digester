@@ -465,14 +465,40 @@ async def update_transcript_segment(
         import difflib
         from ..services.glossary import get_glossary
 
-        # difflib 找出连续的 replace 块，取最短的 (wrong→correct) 候选对
-        # （人名纠错通常是单个连续 token 的替换）
+        def _is_cjk(ch: str) -> bool:
+            """检查字符是否是 CJK 汉字（U+4E00–U+9FFF）"""
+            # 简单范围检查：一 到 鿿
+            return "一" <= ch <= "鿿"
+
+        # difflib 找出连续的 replace 块
+        # 对于人名纠错，需要向后扩展以捕获完整姓名（姓+名）
+        # 例如：杨志玲 -> 杨植麟，difflib 只提取 志玲->植麟
+        # 需要扩展为 杨志玲->杨植麟
         sm = difflib.SequenceMatcher(None, old_text, new_text)
         pairs: list[tuple[str, str]] = []
         for tag, i1, i2, j1, j2 in sm.get_opcodes():
             if tag == "replace":
                 wrong_tok = old_text[i1:i2]
                 right_tok = new_text[j1:j2]
+
+                # 向后扩展：捕获前缀的 CJK 字符（通常是姓氏）
+                # 扩展条件：
+                # 1. 前一个字符在两个文本中相同（在 equal 块中）
+                # 2. 前一个字符是 CJK 汉字
+                # 3. 扩展后的 token 长度 <= 6
+                expand_i1, expand_j1 = i1, j1
+                while (
+                    expand_i1 - 1 >= 0
+                    and expand_j1 - 1 >= 0
+                    and old_text[expand_i1 - 1] == new_text[expand_j1 - 1]  # 确保前缀字符相同
+                    and _is_cjk(old_text[expand_i1 - 1])  # 是 CJK 汉字
+                    and len(wrong_tok) < 6  # 长度限制
+                ):
+                    expand_i1 -= 1
+                    expand_j1 -= 1
+                    wrong_tok = old_text[expand_i1:i2]
+                    right_tok = new_text[expand_j1:j2]
+
                 # 过滤纯空白/标点噪声
                 if wrong_tok.strip() and right_tok.strip():
                     pairs.append((right_tok, wrong_tok))

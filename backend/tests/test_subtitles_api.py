@@ -80,19 +80,20 @@ async def test_update_segment_adds_equal_length_correction_to_glossary(
     assert data["success"] is True
     assert data["added_to_glossary"] is True
 
-    # 验证词库收到了修正对
-    # difflib 提取的是最小差异：志玲 -> 植麟
+    # 验证词库收到了完整姓名对的修正（不是字符级片段）
+    # 编辑 杨志玲 -> 杨植麟 应该产生 ("杨植麟", ["杨志玲"])
+    # 而不是危险的全局片段 ("植麟", ["志玲"])
     assert (
         len(fake.added) >= 1
     ), f"等长编辑应入词库，实际 added={fake.added}"
 
-    # difflib 可能会提取多个 token 对，只要包含核心修正就行
+    # 找到精确匹配的全名对
     found = False
     for correct, wrong_list in fake.added:
-        if "植麟" in correct and "志玲" in wrong_list:
+        if correct == "杨植麟" and "杨志玲" in wrong_list:
             found = True
             break
-    assert found, f"期望包含 '植麟' <- '志玲' 的修正，实际 {fake.added}"
+    assert found, f"期望包含 '杨植麟' <- '杨志玲' 的完整姓名修正，实际 {fake.added}"
 
 
 @pytest.mark.asyncio
@@ -183,11 +184,15 @@ async def test_update_segment_with_multiple_replacements_all_added_to_glossary(
     # 应该至少有替换对（difflib 可能会拆分）
     assert len(fake.added) >= 2
 
-    # 检查核心修正是否存在
-    has_zhiling = any("植麟" in c and "志玲" in w for c, w in fake.added)
-    has_lisi = any("李四" in c and "张三" in w for c, w in fake.added)
-    assert has_zhiling, f"期望包含 '植麟' <- '志玲'，实际 {fake.added}"
-    assert has_lisi, f"期望包含 '李四' <- '张三'，实际 {fake.added}"
+    # 检查核心修正是否存在（现在是完整姓名对，可能包含前缀连接词）
+    # "杨志玲和张三" -> "杨植麟和李四" 会产生：
+    # ("杨植麟", ["杨志玲"]) 和 ("和李四", ["和张三"])
+    # 注意 wrong_list 是列表，需要用 in 检查元素
+    has_zhiling = any("杨植麟" in c and any("杨志玲" in x for x in w) for c, w in fake.added)
+    # 对于第二个替换，连接词"和"也是CJK汉字，会被包含
+    has_lisi = any("李四" in c and any("张三" in x for x in w) for c, w in fake.added)
+    assert has_zhiling, f"期望包含 '杨植麟' <- '杨志玲'，实际 {fake.added}"
+    assert has_lisi, f"期望包含 '李四' <- '张三'（可能带前缀），实际 {fake.added}"
 
 
 @pytest.mark.asyncio
@@ -226,6 +231,57 @@ async def test_update_segment_without_note_to_glossary_does_not_add(
     assert data["success"] is True
     assert data["added_to_glossary"] is False
     assert len(fake.added) == 0
+
+
+@pytest.mark.asyncio
+async def test_update_segment_does_not_bleed_forward_into_predicate(
+    temp_db, temp_data_dir, monkeypatch
+):
+    """向后的CJK扩展不应包含谓语（是/说/讲/老师等），避免过度膨胀token。"""
+    from app.services import glossary as glossary_svc
+    from app.main import app
+
+    class _FakeGlossary:
+        def __init__(self):
+            self.added = []
+
+        def add_entry(self, correct, wrong):
+            self.added.append((correct, list(wrong)))
+
+    fake = _FakeGlossary()
+    monkeypatch.setattr(glossary_svc, "get_glossary", lambda *_a, **_k: fake)
+
+    client = TestClient(app)
+
+    # 编辑 "杨志玲是教授" -> "杨植麟是教授"
+    # 期望词库记录: ("杨植麟", ["杨志玲"])
+    # 而不是: ("杨植麟是", ["杨志玲是"]) —— 这会过度匹配
+    ep_id = await _seed_episode_with_segments(client, ["杨志玲是教授"])
+
+    resp = client.post(
+        f"/api/episodes/{ep_id}/segments/update",
+        json={
+            "segment_index": 0,
+            "text_original": "杨植麟是教授",
+            "note_to_glossary": True,
+        },
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["success"] is True
+    assert data["added_to_glossary"] is True
+
+    # 验证记录的是完整姓名，不包含谓语 "是"
+    found = False
+    for correct, wrong_list in fake.added:
+        if correct == "杨植麟" and "杨志玲" in wrong_list:
+            found = True
+            break
+        # 排除错误情况：包含了 "是"
+        if "是" in correct:
+            assert False, f"不应包含谓语 '是'，但得到了 correct={correct}"
+    assert found, f"期望包含 '杨植麟' <- '杨志玲'（不含谓语），实际 {fake.added}"
 
 
 @pytest.mark.asyncio
