@@ -294,6 +294,20 @@ class AudioProcessPipeline:
             force_polish=transcript_source == "asr",
         )
 
+        # === 阶段 2.6: 词库确定性自动套用（新播客开箱即改）===
+        # polish 后对所有 segment 文本字段做字符串替换；下游 LLM 读干净文本
+        # → 金句/摘要/大纲/洞察自动继承正确人名。幂等，关闭开关则跳过。
+        if getattr(settings, "auto_apply_glossary", True):
+            try:
+                from .services.glossary import get_glossary
+                from .services.glossary_apply import apply_glossary_to_segments
+                g = get_glossary(self.data_dir)
+                n = apply_glossary_to_segments(g, transcript)
+                if n:
+                    logger.info(f"[glossary-auto] {episode_id}: {n} segments corrected")
+            except Exception as e:
+                logger.warning(f"[glossary-auto] {episode_id}: 词库套用失败(不阻塞): {e}")
+
         self._checkpoint_json(episode_id, "transcript.json", transcript.model_dump())
         await self._complete_stage(stages, "transcribe", completed_stages, sync_stages)
 

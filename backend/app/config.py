@@ -127,6 +127,11 @@ class Settings:
             "PODCAST_DIGESTER_LLM_CORRECT_TRANSCRIPT", "false"
         ).lower() == "true"
 
+        # ==================== 词库自动套用（默认开）====================
+        # polish 后对所有 segment 文本字段做确定性字符串替换，下游 LLM 读干净文本
+        # → 金句/摘要/大纲/洞察自动继承正确人名。幂等，关闭开关则跳过。
+        self.auto_apply_glossary = os.getenv("PODCAST_DIGESTER_AUTO_GLOSSARY", "true").lower() == "true"
+
         # ==================== 性能和重试 ====================
         self.http_timeout_seconds = int(os.getenv("PODCAST_DIGESTER_HTTP_TIMEOUT", "30"))
         self.max_retries = int(os.getenv("PODCAST_DIGESTER_MAX_RETRIES", "3"))
