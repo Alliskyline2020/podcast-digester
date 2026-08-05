@@ -305,3 +305,68 @@ async def test_update_segment_basic(temp_db, temp_data_dir):
     assert data["new_text"] == "更新后的文本"
     assert data["segment_index"] == 0
     assert data["added_to_glossary"] is False
+
+
+@pytest.mark.asyncio
+async def test_batch_correct_preview_counts_matches_without_applying(
+    temp_db, temp_data_dir
+):
+    """批量纠错预览模式：入词库+返回命中数，不改文本。"""
+    from app.main import app
+
+    client = TestClient(app)
+
+    # 创建一个带 2 段包含错字的字幕的 episode
+    ep_id = await _seed_episode_with_segments(client, ["杨志林是教授", "杨志林在清华"])
+
+    # 预览模式：apply=False，不应改文本
+    resp = client.post(
+        f"/api/episodes/{ep_id}/batch-correct",
+        json={"correct": "杨植麟", "wrong": "杨志林", "apply": False},
+    )
+
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+    body = resp.json()
+    assert body["success"] is True
+    assert body["applied"] is False
+    assert body["preview"]["transcript_matches"] == 2
+    assert body["added_to_glossary"] is True  # 预览也入词库，方便后续
+
+    # 验证文本未被修改
+    from app.services.episode_loader import load_episode_bundle
+    bundle = await load_episode_bundle(ep_id)
+    joined = "".join(s.text_original for s in bundle.transcript.segments)
+    assert "杨志林" in joined  # 错字仍在
+    assert "杨植麟" not in joined  # 正确字未出现
+
+
+@pytest.mark.asyncio
+async def test_batch_correct_apply_rewrites_transcript_and_modules(
+    temp_db, temp_data_dir
+):
+    """批量纠错应用模式：改文本+改模块+入词库。"""
+    from app.main import app
+
+    client = TestClient(app)
+
+    # 创建一个带错字的字幕段
+    ep_id = await _seed_episode_with_segments(client, ["杨志林是教授"])
+
+    # 应用模式：apply=True，应改文本
+    resp = client.post(
+        f"/api/episodes/{ep_id}/batch-correct",
+        json={"correct": "杨植麟", "wrong": "杨志林", "apply": True},
+    )
+
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+    body = resp.json()
+    assert body["success"] is True
+    assert body["applied"] is True
+    assert body["preview"]["transcript_matches"] == 1
+    assert body["added_to_glossary"] is True
+
+    # 验证文本已修改（通过服务读取，不通过 HTTP GET bundle）
+    from app.services.episode_loader import load_episode_bundle
+    bundle = await load_episode_bundle(ep_id)
+    joined = "".join(s.text_original for s in bundle.transcript.segments)
+    assert "杨植麟" in joined and "杨志林" not in joined

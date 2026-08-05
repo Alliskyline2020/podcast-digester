@@ -606,6 +606,94 @@ async def apply_glossary_to_episode(episode_id: str) -> CorrectTranscriptRespons
     )
 
 
+# ==================== 批量纠错端点 ====================
+
+class BatchCorrectRequest(BaseModel):
+    """批量纠错请求"""
+    correct: str
+    wrong: str
+    apply: bool = False  # False=仅预览（入词库+算命中），True=落到文本+模块
+
+
+class BatchCorrectPreview(BaseModel):
+    """批量纠错预览结果"""
+    transcript_matches: int
+    modules: dict[str, int]
+
+
+class BatchCorrectResponse(BaseModel):
+    """批量纠错响应"""
+    success: bool
+    added_to_glossary: bool
+    applied: bool
+    preview: BatchCorrectPreview
+
+
+def _count_glossary_hits(glossary, transcript_dict) -> int:
+    """算 transcript 里有几个 segment 会被改（不实际改）。
+
+    检查全部 5 个字段（text_original/text_with_punct/text_translated/text_zh/text_en），
+    每个 segment 只计一次（任一字段命中即 break）。
+    """
+    n = 0
+    for seg in transcript_dict.get("segments", []):
+        for field in ("text_original", "text_with_punct", "text_translated", "text_zh", "text_en"):
+            v = seg.get(field) or ""
+            if v and glossary.correct_text(v) != v:
+                n += 1
+                break
+    return n
+
+
+@router.post("/api/episodes/{episode_id}/batch-correct", response_model=BatchCorrectResponse)
+async def batch_correct_episode(episode_id: str, request: BatchCorrectRequest) -> BatchCorrectResponse:
+    """批量纠错：输一次 错误→正确，预览或应用到当集字幕+章节+摘要+金句+洞察，并入词库。
+
+    - apply=False（默认）：入词库 + 返回命中数预览，不改任何文本。
+    - apply=True：复用 apply_glossary 全模块字符串替换，落盘 + 写 DB。
+    """
+    if not request.correct.strip() or not request.wrong.strip():
+        raise HTTPException(status_code=400, detail="correct 和 wrong 不能为空")
+
+    ep_data = await EpisodeRepository.get_by_id(episode_id)
+    if not ep_data:
+        raise HTTPException(status_code=404, detail="节目不存在")
+
+    from ..services.glossary import get_glossary, apply_glossary_to_all_modules
+    from ..services.glossary_apply import apply_glossary_to_segments
+
+    glossary = get_glossary(deps.data_dir)
+
+    # 1) 入词库（合并去重，幂等）
+    glossary.add_entry(request.correct, [request.wrong])
+    added = True
+
+    # 2) 预览命中
+    bundle = await load_episode_bundle(episode_id)
+    transcript_dict = bundle.transcript.model_dump() if bundle.transcript else {"segments": []}
+    transcript_matches = _count_glossary_hits(glossary, transcript_dict)
+
+    applied = False
+    modules: dict[str, int] = {}
+    if request.apply:
+        # 3) 应用到 transcript（使用 Task 2 的 helper，修正全部 5 个字段）
+        apply_glossary_to_segments(glossary, bundle.transcript)
+        await EpisodeRepository.update_transcript(episode_id, bundle.transcript.model_dump())
+
+        # 4) 应用到 4 个下游模块
+        media_dir = deps.data_dir / "media" / episode_id
+        modules = apply_glossary_to_all_modules(glossary, episode_id, media_dir)
+        applied = True
+        logger.info(f"[BatchCorrect] {episode_id}: applied {request.wrong}->{request.correct}")
+
+    return BatchCorrectResponse(
+        success=True,
+        added_to_glossary=added,
+        applied=applied,
+        preview=BatchCorrectPreview(transcript_matches=transcript_matches, modules=modules),
+    )
+
+
 # _sync_episode_modules / _create_background_task / _log_task_exception
 # 已迁移到 .services.background_tasks，通过顶部 import 引入到本模块命名空间。
 # _load_highlight_fast / _load_episode_bundle 等 loader 助手也已迁移到
