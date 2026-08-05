@@ -292,9 +292,9 @@
               </div>
               <div v-if="batchPreview" class="glossary-batch-result">
                 <span>字幕命中 {{ batchPreview.transcript_matches }} 段</span>
-                <span v-for="(v, k) in batchPreview.modules" :key="k" v-if="v > 0">
-                  · {{ ({outline:'章节',summaries:'摘要',highlight:'金句',product_insights:'洞察'})[k] || k }} {{ v }}
-                </span>
+                <template v-for="(v, k) in batchPreview.modules" :key="k">
+                  <span v-if="v > 0">· {{ ({outline:'章节',summaries:'摘要',highlight:'金句',product_insights:'洞察'})[k] || k }} {{ v }}</span>
+                </template>
               </div>
             </div>
             <div v-if="Object.keys(glossary).length > 0" class="glossary-list">
