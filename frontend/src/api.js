@@ -268,6 +268,19 @@ export async function applyGlossary(episodeId) {
 }
 
 /**
+ * 批量纠错：一次 错误→正确，预览或应用到当集全篇 + 入词库
+ */
+export async function batchCorrect(episodeId, correct, wrong, apply = false) {
+  const res = await fetchWithTimeout(`${API_BASE}/episodes/${episodeId}/batch-correct`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ correct, wrong, apply })
+  }, 60000)
+  if (!res.ok) throw new Error('批量纠错失败')
+  return await res.json()
+}
+
+/**
  * 获取词库
  */
 export async function getGlossary() {

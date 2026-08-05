@@ -273,6 +273,30 @@
                 添加
               </button>
             </div>
+
+            <!-- 批量纠错子区 -->
+            <div class="glossary-batch">
+              <div class="glossary-section-title">⚡ 批量纠错（全篇 + 入词库）</div>
+              <div class="glossary-add-row">
+                <input v-model="batchWrongText" placeholder="错误词(如:杨志林)" class="glossary-input" />
+                <span class="glossary-arrow">→</span>
+                <input v-model="batchCorrectText" placeholder="正确词(如:杨植麟)" class="glossary-input" />
+              </div>
+              <div class="glossary-batch-actions">
+                <button @click="batchCorrectPreview" :disabled="!batchWrongText || !batchCorrectText || batchBusy" class="btn btn-glossary">
+                  {{ batchBusy ? '⏳' : '👁 预览' }}
+                </button>
+                <button @click="batchCorrectApply" :disabled="!batchWrongText || !batchCorrectText || batchBusy" class="btn btn-glossary-primary">
+                  {{ batchBusy ? '⏳ 应用中' : '✅ 应用全篇' }}
+                </button>
+              </div>
+              <div v-if="batchPreview" class="glossary-batch-result">
+                <span>字幕命中 {{ batchPreview.transcript_matches }} 段</span>
+                <span v-for="(v, k) in batchPreview.modules" :key="k" v-if="v > 0">
+                  · {{ ({outline:'章节',summaries:'摘要',highlight:'金句',product_insights:'洞察'})[k] || k }} {{ v }}
+                </span>
+              </div>
+            </div>
             <div v-if="Object.keys(glossary).length > 0" class="glossary-list">
               <div v-for="(wrongs, correct) in glossary" :key="correct" class="glossary-entry">
                 <span class="glossary-correct">{{ correct }}</span>
@@ -830,6 +854,12 @@ const newGlossaryCorrect = ref('')       // 新词库条目-正确词
 const applyingGlossary = ref(false)      // 批量纠错进行中
 const glossaryNotice = ref('')           // 批量纠错结果反馈
 
+// 批量纠错 refs
+const batchWrongText = ref('')           // 批量纠错-错误词输入
+const batchCorrectText = ref('')         // 批量纠错-正确词输入
+const batchBusy = ref(false)             // 批量纠错进行中
+const batchPreview = ref(null)           // 批量纠错预览结果 {transcript_matches, modules}
+
 // 单句 segment 是否对应当前播放位置
 const isCurrentSegment = (seg) => {
   if (!currentTime.value || !seg) return false
@@ -969,6 +999,45 @@ const applyGlossaryAll = async () => {
     glossaryNotice.value = '❌ 纠错失败:' + (e.message || '')
   } finally {
     applyingGlossary.value = false
+    setTimeout(() => { glossaryNotice.value = '' }, 5000)
+  }
+}
+
+// 批量纠错预览
+const batchCorrectPreview = async () => {
+  if (!batchWrongText.value || !batchCorrectText.value) return
+  batchBusy.value = true
+  glossaryNotice.value = '⏳ 预览中…'
+  try {
+    const r = await api.batchCorrect(episodeId.value, batchCorrectText.value, batchWrongText.value, false)
+    batchPreview.value = r.preview
+    glossaryNotice.value = `✅ 已入词库「${batchCorrectText.value} ← ${batchWrongText.value}」· 字幕命中 ${r.preview.transcript_matches} 段（点"应用全篇"生效）`
+  } catch (e) {
+    glossaryNotice.value = '❌ 预览失败：' + (e.message || '未知错误')
+  } finally {
+    batchBusy.value = false
+    setTimeout(() => { glossaryNotice.value = '' }, 5000)
+  }
+}
+
+// 批量纠错应用到全篇
+const batchCorrectApply = async () => {
+  if (!batchWrongText.value || !batchCorrectText.value) return
+  if (!confirm(`确认把本集全部「${batchWrongText.value}」改成「${batchCorrectText.value}」并写入词库？`)) return
+  batchBusy.value = true
+  glossaryNotice.value = '⏳ 应用中（字幕+章节+摘要+金句+洞察）…'
+  try {
+    const r = await api.batchCorrect(episodeId.value, batchCorrectText.value, batchWrongText.value, true)
+    const p = r.preview
+    glossaryNotice.value = `✅ 已应用：字幕 ${p.transcript_matches} 段·已入词库`
+    batchWrongText.value = ''
+    batchCorrectText.value = ''
+    batchPreview.value = null
+    await loadEpisode()  // 刷新展示文本
+  } catch (e) {
+    glossaryNotice.value = '❌ 应用失败：' + (e.message || '未知错误')
+  } finally {
+    batchBusy.value = false
     setTimeout(() => { glossaryNotice.value = '' }, 5000)
   }
 }
@@ -2021,6 +2090,66 @@ defineExpose({
   color: #9ca3af;
   margin: 0;
   font-style: italic;
+}
+
+/* === 批量纠错子区 === */
+.glossary-batch {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed #e5e7eb;
+}
+
+.glossary-section-title {
+  font-size: 0.85rem;
+  color: #6b7280;
+  margin-bottom: 6px;
+}
+
+.glossary-batch-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.glossary-batch-result {
+  margin-top: 6px;
+  font-size: 0.8rem;
+  color: #6b7280;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.btn {
+  padding: 4px 12px;
+  border: none;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.btn-glossary {
+  background: #f3f4f6;
+  color: #374151;
+}
+
+.btn-glossary:hover:not(:disabled) {
+  background: #e5e7eb;
+}
+
+.btn-glossary-primary {
+  background: #2563eb;
+  color: white;
+}
+
+.btn-glossary-primary:hover:not(:disabled) {
+  background: #1d4ed8;
 }
 
 /* === 单句 segment 编辑行 === */
