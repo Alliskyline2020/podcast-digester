@@ -23,6 +23,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# verify 阶段调参：保守的质量门，默认 keep。
+_VERIFY_CONTEXT_HALF_WINDOW = 2    # 每条 cited 取 ±2 邻段作上下文，让 verify 看到主题是否真被讨论
+_VERIFY_MAX_SEGMENTS_PER_ITEM = 6  # 单条 insight 喂给 verify 的段数上限（控 prompt 体积）
+_VERIFY_DISTRUST_DROP_RATIO = 0.5  # 砍掉超过此比例且 batch 够大时判 verify 自身失灵
+_VERIFY_DISTRUST_MIN_BATCH = 4     # 仅在 batch ≥ 此值时按比例兜底；小 batch 由 would-drop-all 兜底
+
 
 async def extract_product_insights(
     title: str,
@@ -169,7 +175,16 @@ async def _verify_insights(
     transcript: "Transcript",
     domain: str,
 ) -> List[InsightItem]:
-    """二次 LLM 审核 keep/drop。失败时优雅降级（keep all）。"""
+    """二次 LLM 审核 keep/drop。
+
+    设计原则：verify 是「保守的质量门」，**默认 keep**。只在能明确指出缺陷时才 drop
+    （hallucinated 实体 / 纯空洞废话）。dedup_insights 已在 verify 前去掉近重复，
+    故 verify 不再判 duplicate。失败时优雅降级（keep all）。
+
+    Guardrail：提取 prompt 自带「宁缺毋滥」质量门 + dedup 已去重，若 verify 仍要砍
+    >50%（batch≥4）或 would-drop-all，几乎必是 verify 自身对 ASR 综合洞察失灵
+    （见 ep_1785889603768 实例：7→0 / 7→1 / 7→0）——此时 distrust verify 保留全部。
+    """
     if not items:
         return items
     review_block = _build_insight_review_block(items, transcript, domain)
@@ -185,7 +200,25 @@ async def _verify_insights(
             if r.get("verdict") == "drop" and r.get("domain") == domain
         }
         kept = [it for i, it in enumerate(items) if i not in drop_indices]
-        logger.info(f"[verify:{domain}] {len(items)} → {len(kept)} (dropped {len(items) - len(kept)})")
+        dropped = len(items) - len(kept)
+
+        # Guardrail 1: would-drop-all → 几乎必是 verify 失灵（提取已过质量门）
+        if not kept:
+            logger.warning(
+                f"[verify:{domain}] would drop all {len(items)} — likely verify misfire "
+                f"(extraction is pre-quality-gated), keeping all"
+            )
+            return items
+        # Guardrail 2: 大 batch 下砍 >50% → verify 失灵信号
+        if (len(items) >= _VERIFY_DISTRUST_MIN_BATCH
+                and dropped > len(items) * _VERIFY_DISTRUST_DROP_RATIO):
+            logger.warning(
+                f"[verify:{domain}] dropped {dropped}/{len(items)} (>50%) — likely verify "
+                f"misfire, keeping all"
+            )
+            return items
+
+        logger.info(f"[verify:{domain}] {len(items)} → {len(kept)} (dropped {dropped})")
         return kept
     except Exception as e:
         logger.warning(f"[verify:{domain}] failed, keep all {len(items)}: {e}")
@@ -197,15 +230,26 @@ def _build_insight_review_block(
     transcript: "Transcript",
     domain: str,
 ) -> str:
-    """构建审核输入：每条 insight + cited segments 原文。"""
+    """构建审核输入：每条 insight + cited segments 及其邻段原文。
+
+    邻段窗口(_VERIFY_CONTEXT_HALF_WINDOW)给 verify 足够上下文判断「该主题是否
+    真的被讨论」，避免只看孤立的 1-3 条 cited 误判跨段综合洞察为 unsupported。
+    单条 insight 总段数被 _VERIFY_MAX_SEGMENTS_PER_ITEM 封顶，控制 prompt 体积。
+    """
     seg_by_id = {s.id: s for s in transcript.segments}
     lines = []
     for i, it in enumerate(items):
-        cited_texts = []
-        for sid in it.cited_segment_ids[:3]:
-            seg = seg_by_id.get(sid)
-            if seg:
-                cited_texts.append(f"[{sid}] {chinese_text(seg)}")
+        # cited + ±邻段 并集，按 id 排序后封顶
+        candidate_ids: set = set()
+        for sid in it.cited_segment_ids:
+            if not isinstance(sid, int):
+                continue
+            for delta in range(-_VERIFY_CONTEXT_HALF_WINDOW, _VERIFY_CONTEXT_HALF_WINDOW + 1):
+                nid = sid + delta
+                if nid >= 0 and nid in seg_by_id:
+                    candidate_ids.add(nid)
+        ordered_ids = sorted(candidate_ids)[:_VERIFY_MAX_SEGMENTS_PER_ITEM]
+        cited_texts = [f"[{sid}] {chinese_text(seg_by_id[sid])}" for sid in ordered_ids]
         lines.append(
             f"[{domain}:{i}] category={it.category.value}\n"
             f"  text: {it.text_zh}\n"

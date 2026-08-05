@@ -1,12 +1,19 @@
 """llm_product_insights 单元测试。
 
-覆盖 _build_raw_transcript 章节过滤 + _parse_insight_items 结构化解析。
+覆盖 _build_raw_transcript 章节过滤 + _parse_insight_items 结构化解析 +
+_verify_insights guardrail（防止 verify 把整域洞察砍光）+
+_build_insight_review_block 邻段上下文。
 verify pass / extract_product_insights 的 LLM 集成测试需要 mock chat_json。
 """
+import pytest
+
 from app.models import Transcript, Segment, InsightItem, InsightCategory
+from app.llm_pipeline import llm_product_insights as lpi
 from app.llm_pipeline.llm_product_insights import (
     _build_raw_transcript,
     _parse_insight_items,
+    _build_insight_review_block,
+    _verify_insights,
 )
 
 
@@ -139,3 +146,160 @@ class TestParseInsightItems:
             self._raw("市场洞察", "market_trend", [0]),
         ], {0}, "market")
         assert items[0].category == InsightCategory.MARKET_TREND
+
+
+def _item(text: str, cited, category="product_strategy", rationale="r") -> InsightItem:
+    return InsightItem(
+        text_zh=text,
+        cited_segment_ids=list(cited),
+        category=InsightCategory(category),
+        rationale_zh=rationale,
+    )
+
+
+def _transcript_with_text(n: int) -> Transcript:
+    """每段 text_zh = '第{i}句'，便于断言 review block 出现了哪些邻段。"""
+    return Transcript(
+        episode_id="t",
+        language="zh",
+        segments=[
+            Segment(id=i, start_ms=i * 1000, end_ms=(i + 1) * 1000,
+                    text_original=f"第{i}句内容", text_zh=f"第{i}句内容")
+            for i in range(n)
+        ],
+    )
+
+
+class TestBuildInsightReviewBlockContext:
+    """verify 必须看到 cited segment 周围的上下文，否则无法判断跨段综合洞察是否真实。"""
+
+    def test_includes_neighbor_segments_around_citation(self):
+        t = _transcript_with_text(10)
+        items = [_item("某综合洞察", cited=[5])]
+        block = _build_insight_review_block(items, t, "product")
+        # cited 5 + 邻居 3,4,6,7 都应出现
+        for sid in (3, 4, 5, 6, 7):
+            assert f"第{sid}句内容" in block
+        # 远离的段不应出现
+        assert "第0句内容" not in block
+        assert "第9句内容" not in block
+
+    def test_boundary_citation_only_has_neighbors_on_one_side(self):
+        t = _transcript_with_text(10)
+        items = [_item("开头洞察", cited=[0])]
+        block = _build_insight_review_block(items, t, "product")
+        assert "第0句内容" in block
+        assert "第1句内容" in block
+        assert "第2句内容" in block
+        # 0 的左侧没有，不应崩溃也不应出现负 id
+        assert "-1" not in block
+
+    def test_caps_total_segments_per_item(self):
+        """引用很多段时，单条 insight 给 verify 的段数有上限，避免 prompt 爆炸。"""
+        t = _transcript_with_text(40)
+        items = [_item("引用很多", cited=[10, 20, 30])]
+        block = _build_insight_review_block(items, t, "product")
+        # cap = 6（默认）：无论 cited+neighbor 并集多大，最多喂 6 段原文
+        # 用 "第N句内容" 计数实际出现的段 id 数
+        appeared = sum(1 for i in range(40) if f"第{i}句内容" in block)
+        assert appeared <= 6
+
+    def test_missing_segment_skipped_gracefully(self):
+        t = _transcript_with_text(5)  # 只有 0-4
+        items = [_item("引用越界", cited=[4, 99])]
+        block = _build_insight_review_block(items, t, "product")
+        assert "第4句内容" in block
+
+
+class TestVerifyInsightsGuardrail:
+    """
+    回归：120 分钟播客曾出现 [verify:product] 7→0 / [verify:technical] 7→1 /
+    [verify:market] 7→0 —— verify 把整域砍光。提取 prompt 已自带「宁缺毋滥」质量门
+    且 dedup_insights 已在 verify 前去重，verify 再砍 >50% 几乎必是其自身失灵。
+    guardrail：would-drop-all 或 (>50% 且 batch≥4) 时 distrust，保留全部。
+    """
+
+    @staticmethod
+    async def _fake_chat_json_returning(reviews):
+        async def _fake(system, user, **kw):
+            return {"reviews": reviews}
+        return _fake
+
+    @pytest.mark.asyncio
+    async def test_distrusts_when_verify_drops_everything(self, monkeypatch):
+        """7 条全判 drop → guardrail 必须保留全部 7 条。"""
+        items = [_item(f"洞察{i}", cited=[i]) for i in range(7)]
+        monkeypatch.setattr(
+            lpi, "chat_json",
+            await self._fake_chat_json_returning(
+                [{"domain": "product", "index": i, "verdict": "drop",
+                  "reason": "too_generic"} for i in range(7)]
+            ),
+        )
+        kept = await _verify_insights(items, _transcript_with_text(7), "product")
+        assert len(kept) == 7
+
+    @pytest.mark.asyncio
+    async def test_distrusts_when_verify_drops_majority_of_large_batch(self, monkeypatch):
+        """batch=6, drop 4 (>50%) → guardrail 保留全部。"""
+        items = [_item(f"洞察{i}", cited=[i]) for i in range(6)]
+        monkeypatch.setattr(
+            lpi, "chat_json",
+            await self._fake_chat_json_returning(
+                [{"domain": "technical", "index": i, "verdict": "drop",
+                  "reason": "unsupported"} for i in [0, 1, 3, 5]]
+            ),
+        )
+        kept = await _verify_insights(items, _transcript_with_text(6), "technical")
+        assert len(kept) == 6
+
+    @pytest.mark.asyncio
+    async def test_applies_minority_drops_normally(self, monkeypatch):
+        """batch=5, drop 2 (≤50%) → 正常应用，保留 3。"""
+        items = [_item(f"洞察{i}", cited=[i]) for i in range(5)]
+        monkeypatch.setattr(
+            lpi, "chat_json",
+            await self._fake_chat_json_returning(
+                [{"domain": "product", "index": 1, "verdict": "drop",
+                  "reason": "hallucinated"},
+                 {"domain": "product", "index": 3, "verdict": "drop",
+                  "reason": "too_generic"}]
+            ),
+        )
+        kept = await _verify_insights(items, _transcript_with_text(5), "product")
+        assert len(kept) == 3
+        kept_texts = {it.text_zh for it in kept}
+        assert kept_texts == {"洞察0", "洞察2", "洞察4"}
+
+    @pytest.mark.asyncio
+    async def test_keeps_all_when_llm_raises(self, monkeypatch):
+        """verify LLM 调用失败 → 优雅降级保留全部（既有行为，锁定）。"""
+        items = [_item(f"洞察{i}", cited=[i]) for i in range(4)]
+
+        async def boom(system, user, **kw):
+            raise RuntimeError("upstream 500")
+
+        monkeypatch.setattr(lpi, "chat_json", boom)
+        kept = await _verify_insights(items, _transcript_with_text(4), "product")
+        assert len(kept) == 4
+
+    @pytest.mark.asyncio
+    async def test_empty_items_short_circuits(self, monkeypatch):
+        async def should_not_be_called(system, user, **kw):
+            raise AssertionError("chat_json should not be called for empty input")
+        monkeypatch.setattr(lpi, "chat_json", should_not_be_called)
+        assert await _verify_insights([], _transcript_with_text(3), "product") == []
+
+    @pytest.mark.asyncio
+    async def test_drop_all_in_small_batch_also_guarded(self, monkeypatch):
+        """batch=2（<4）全 drop → would-drop-all 兜底仍保留全部。"""
+        items = [_item("洞察0", cited=[0]), _item("洞察1", cited=[1])]
+        monkeypatch.setattr(
+            lpi, "chat_json",
+            await self._fake_chat_json_returning(
+                [{"domain": "market", "index": 0, "verdict": "drop", "reason": "x"},
+                 {"domain": "market", "index": 1, "verdict": "drop", "reason": "y"}]
+            ),
+        )
+        kept = await _verify_insights(items, _transcript_with_text(2), "market")
+        assert len(kept) == 2

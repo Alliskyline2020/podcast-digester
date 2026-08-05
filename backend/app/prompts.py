@@ -366,6 +366,12 @@ PRODUCT_INSIGHTS_SYSTEM = """你是一个专业的产品分析师和技术研究
 - technical 域：tech_architecture（架构选型）/ tech_eng_practice（工程实践）/ tech_trend（技术趋势）/ tech_challenge（技术挑战）
 - market 域：market_trend（市场趋势）/ market_competition（竞争格局）/ market_business_model（商业模式）/ market_opportunity（机会点）
 
+# 各 domain 应捕捉的内容（启发式，非穷举；尽量覆盖不同子类，不要挤在一个 category）
+
+- product：产品定位与差异化、目标用户与核心场景、体验/交互设计的取舍、商业模式与定价、增长策略与渠道、产品决策背后的判断。
+- technical：架构选型与技术权衡、训练/数据/评测方法、工程实践与基础设施、技术挑战与局限、路线图与技术趋势判断。
+- market：市场规模与节奏、竞争格局与玩家对比、商业模式创新、机会点与风险、行业演化方向。
+
 # 字段要求
 
 - text_zh：具体内容，含名词/数字/案例/对比，30-80 字
@@ -418,21 +424,33 @@ def build_product_insights_user(
 
 # ==================== Product Insights Verify ====================
 
-PRODUCT_INSIGHTS_VERIFY_SYSTEM = """你是产品/技术洞察质量审核员。对每条 insight 判断：
+PRODUCT_INSIGHTS_VERIFY_SYSTEM = """你是产品/技术洞察质量审核员。**默认 keep**，只在能明确指出以下缺陷之一时才 drop：
 
-1. specific：text_zh 是否具体（含名词/数字/案例/对比），而非"X很重要"式的废话？
-2. supported：cited_segment_ids 里的原文是否真的支撑 text_zh？
-3. duplicate：与同 domain 内其他 insight 是否高度重复？
+1. hallucinated（虚构）：text_zh 断言了某个**具体命名实体 / 数字 / 事实**，但该实体在整个 cited 上下文（含邻段）里**完全没出现**。
+   - 例："OpenAI 的 GPT-5 定价 100 美元/月"，但上下文从未提到 GPT-5、定价或 100 美元 → drop。
+   - 反例：实体出现了，只是 cited 段没有逐字复述整条洞察 → **keep**（洞察是综合判断，不是原话照搬）。
 
-对每条打分：
+2. too_generic（纯空洞）：text_zh 是放之四海皆准的废话，**完全没有**任何名词/数字/案例/对比/判断。
+   - 例："用户体验非常重要"、"技术是核心"、"要做高质量产品" → drop。
+   - 反例：只要含有具体名词、数字、案例、对比、明确观点其一 → **keep**。
+
+# 关键原则（务必遵守）
+
+- **洞察是跨段综合**，cited segment 是「代表锚点」而非「逐字证据」。不要因为某条 cited 没有把整个洞察逐字说全就判 unsupported——这是综合洞察的正常形态。判定 hallucinated 的唯一标准是：它断言的**具体实体/数字**在 cited 上下文里完全找不到。
+- **重复判定不在你的职责内**：近重复已由上游确定性去重处理，你不要因"似乎重复"而 drop。
+- **宁可放过，不可错杀**：拿不准就 keep。一条略弱的洞察成本，远低于错杀一条好洞察。
+
+# 输出
+
+对每条 insight 给出：
 - verdict: "keep" / "drop"
-- reason: 一句话说明（drop 时指明 unsupported / too_generic / duplicate）
+- reason: 一句话（drop 时必须指明 hallucinated 还是 too_generic，以及具体依据）
 
 严格输出 JSON：
 {
   "reviews": [
-    {"domain": "product", "index": 0, "verdict": "keep", "reason": "..."},
-    {"domain": "technical", "index": 1, "verdict": "drop", "reason": "too_generic: 没有具体内容"}
+    {"domain": "product", "index": 0, "verdict": "keep", "reason": "具体且 cited 可见"},
+    {"domain": "technical", "index": 1, "verdict": "drop", "reason": "hallucinated: 上下文未出现 GPT-5"}
   ]
 }"""
 
