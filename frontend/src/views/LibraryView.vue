@@ -175,6 +175,23 @@
           <!-- 底部元信息行 -->
           <div class="card-meta">
             <span class="meta-time">{{ formatTime(ep.created_at) }}</span>
+            <template v-if="isExternalUrl(ep.source_url)">
+              <span class="meta-dot">·</span>
+              <a
+                :href="ep.source_url"
+                :title="ep.source_url"
+                class="meta-source-link"
+                target="_blank"
+                rel="noopener noreferrer"
+                @click.stop
+              >
+                <svg class="meta-source-icon" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+                  <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+                </svg>
+                <span class="meta-source-text">{{ sourceHost(ep.source_url) }} ↗</span>
+              </a>
+            </template>
             <template v-if="ep.status === 'ready' && ep.highlights_count > 0">
               <span class="meta-dot">·</span>
               <span class="meta-highlights">💡 {{ ep.highlights_count }} 条亮点</span>
@@ -356,6 +373,17 @@ const verdictText = (verdict) => {
 
 const isProcessing = (status) => {
   return ['pending', 'downloading', 'asr_running', 'llm_running'].includes(status)
+}
+
+const isExternalUrl = (url) => /^https?:\/\//i.test(url || '')
+
+const sourceHost = (url) => {
+  // 卡片上的"跳回原视频"链接文字：显示去 www. 的主机名，解析失败回退"原视频"
+  try {
+    return new URL(url).hostname.replace(/^www\./, '')
+  } catch {
+    return '原视频'
+  }
 }
 
 const formatTime = (dateStr) => {
@@ -965,6 +993,24 @@ onUnmounted(() => {
 .meta-dot { color: #d1d5db; }
 .meta-highlights { color: #6b7280; }
 .meta-verdict { font-weight: 600; }
+
+/* 跳回原视频链接：紧凑、可截断，hover 变蓝 */
+.meta-source-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: #6b7280;
+  text-decoration: none;
+  max-width: 60%;
+  transition: color 0.15s ease;
+}
+.meta-source-link:hover { color: #2563eb; }
+.meta-source-icon { flex-shrink: 0; }
+.meta-source-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* 裁定标签配色 */
 .verdict-deep_listen { color: #047857; }
