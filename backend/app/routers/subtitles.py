@@ -459,20 +459,30 @@ async def update_transcript_segment(
 
     segment.text_original = new_text
 
-    # 5. 如果需要，添加到词库
+    # 5. 如果需要，提取被替换的最小 token 对，加入词库
     added_to_glossary = False
-    if request.note_to_glossary:
+    if request.note_to_glossary and old_text and new_text and old_text != new_text:
+        import difflib
         from ..services.glossary import get_glossary
 
-        # 简单的启发式：提取差异
-        if old_text and new_text and old_text != new_text:
-            # 假设较短的词是错误词（简化逻辑）
+        # difflib 找出连续的 replace 块，取最短的 (wrong→correct) 候选对
+        # （人名纠错通常是单个连续 token 的替换）
+        sm = difflib.SequenceMatcher(None, old_text, new_text)
+        pairs: list[tuple[str, str]] = []
+        for tag, i1, i2, j1, j2 in sm.get_opcodes():
+            if tag == "replace":
+                wrong_tok = old_text[i1:i2]
+                right_tok = new_text[j1:j2]
+                # 过滤纯空白/标点噪声
+                if wrong_tok.strip() and right_tok.strip():
+                    pairs.append((right_tok, wrong_tok))
+        if pairs:
+            # 同一次编辑可能有多处替换，全部入词库（correct 为主键，wrong_list 合并）
             glossary = get_glossary(deps.data_dir)
-            if len(old_text) < len(new_text):
-                # old是错误词，new是正确词
-                glossary.add_entry(new_text, [old_text])
+            for right_tok, wrong_tok in pairs:
+                glossary.add_entry(right_tok, [wrong_tok])
                 added_to_glossary = True
-                logger.info(f"[Glossary] Added entry: {new_text} <- {old_text}")
+                logger.info(f"[Glossary] Added entry: {right_tok} <- {wrong_tok}")
 
     # 6. 保存transcript到数据库
     transcript_dict = bundle.transcript.model_dump()
