@@ -4,7 +4,7 @@
 
 **Turn any podcast / video link into structured knowledge you can act on in 5 minutes.**
 
-Paste a link → auto-download, transcribe, chapter, summarize, extract highlights → bilingual subtitles with click-to-seek.
+Paste a link → auto-queue, download, transcribe, clean, chapter, summarize, extract highlights → bilingual subtitles with click-to-seek.
 
 A local-first, single-user tool built for high-density information consumers — PMs, researchers, investors.
 
@@ -48,7 +48,7 @@ When you face a 2-hour podcast, the real cost isn't *understanding* it — it's 
 
 <div align="center">
 <table>
-<tr><td align="center"><b>Library</b> — paste a link, see processing status, click to open</td></tr>
+<tr><td align="center"><b>Library</b> — paste a link, see processing status, jump back to the source video</td></tr>
 <tr><td><img src="./docs/images/library.png" alt="Library 节目库"/></td></tr>
 <tr><td align="center"><b>Player</b> — bilingual subtitles / chapters / summary / highlights / insights, click to seek</td></tr>
 <tr><td><img src="./docs/images/player.png" alt="Player 播放器"/></td></tr>
@@ -60,10 +60,11 @@ When you face a 2-hour podcast, the real cost isn't *understanding* it — it's 
 - **Chapter ticks** on the timeline; click a chapter title to jump
 - Five kinds of **highlights** in the right pane, each with the source citation + timestamp; click to seek to the clip
 - **Bilingual subtitles** (zh / en) under the player, precisely aligned to the timeline
+- **Glossary panel**: batch-correct names / terms, browse accumulated entries
 
 ## 🧠 Pipeline
 
-Each episode flows through these stages in order, with **resumable checkpoints** (per-stage JSON + SQLite state):
+Each episode flows through these stages in order, with **resumable checkpoints** (per-stage JSON + SQLite state machine):
 
 <div align="center">
 
@@ -75,13 +76,44 @@ Chinese sources auto-skip `translate`; platform subtitles that already have prop
 
 | Stage | Output |
 |-------|--------|
-| `download` | audio file (`data/media/ep_*/`) |
+| `download` | audio file (`data/media/ep_*/`), plus a title-named copy in the audio library |
 | `transcribe` | timestamped subtitle segments (`transcript.json`) |
-| `polish` / `translate` | normalized punctuation + bilingual fields (`text_zh` / `text_en`) |
+| `polish` / `translate` | normalized punctuation + bilingual fields (`text_zh` / `text_en`); the global glossary is auto-applied after polish |
 | `chapterize` | chapter titles and time ranges |
 | `summarize` | per-chapter Chinese summaries |
 | `highlight` | TL;DR + verdict + five highlight kinds (with citation / timestamp) |
 | `product_insights` | product / tech / market insights + mentioned companies |
+
+## 📬 Queue & Resumability
+
+Paste several links and walk away — a built-in **serial FIFO queue** processes one episode at a time while the rest wait:
+
+- **Enqueue:** each pasted link creates a `pending` job (ordered by submission time; rate-limited to 5 per minute)
+- **Serial processing:** a singleton Worker (guaranteed by an `fcntl` file lock) polls every 5 seconds and processes jobs strictly in `created_at` order — no concurrent resource contention
+- **Resumable checkpoints:** every stage writes a checkpoint; after a restart or crash, processing resumes **exactly at the failed stage** — no repeated LLM calls for finished work
+- **Crash self-healing:** each poll, the Worker scans for orphan jobs stuck in `downloading / asr_running / llm_running` mid-states and safely resets them into the queue
+- **Smart retries:** transient errors (CDN flakiness / rate limits, classified by the downloader as `DownloadTemporaryError`) retry with exponential backoff (10s → 20s → 40s, 3 attempts by default); permanent errors (invalid URL / deleted video) go straight to `failed` — no spinning, no queue blockage
+
+## 📝 Subtitle Cleaning & Glossary Correction
+
+ASR filler words, stuttering, and name / terminology errors are handled in two layers:
+
+**Layer 1 · LLM cleaning** (the `polish` stage): punctuation normalization, filler / stutter removal, spoken-language smoothing, plus entity harvesting that unifies names and terms across the whole episode.
+
+**Layer 2 · Global glossary:** every name / term you correct is stored as "correct form ← wrong variants" — **fix once, benefit forever**:
+
+- **Batch correction:** in the player's glossary panel, enter "wrong → right", **preview the hit counts** (subtitles N segments · chapters N · summaries N · highlights N · insights N), then apply to **all five modules** in one click — the entry is added to the glossary automatically
+- **Editor self-learning:** editing a word in the subtitle editor (even equal-length edits like `杨志玲→杨植麟`) auto-adds it to the glossary via difflib diffing + CJK backtracking that captures the **full name** — never a fragment like "植麟←志玲" that would damage unrelated text
+- **Auto-apply to new episodes:** the glossary is shared globally; every new episode gets a **deterministic apply** of all entries after polish (`PODCAST_DIGESTER_AUTO_GLOSSARY`, on by default) — the transcript is clean at the source, so downstream summaries / highlights / insights inherit the corrections
+- **Idempotent & safe:** string replacement only hits wrong variants — already-correct text is never re-modified; entries merge with dedup, so re-applying never creates duplicates
+
+> There's also a more aggressive **LLM transcript correction** (`PODCAST_DIGESTER_LLM_CORRECT_TRANSCRIPT`, off by default): uses the LLM with title / description context to fix homophone errors before polish — adds ~100s of LLM time and cost per episode, enable as needed.
+
+## 📤 Export & Audio Library
+
+- **HTML export:** one click in the player exports the whole episode (summary / chapters / highlights / insights); check "include full transcript" to attach the **complete LLM-cleaned original transcript**, with highlight sentences auto-**bolded**
+- **Audio library:** after download, a copy of the audio is saved under the **episode title** (Chinese title preferred) in `data/audio_library/` — easy to find by name in your file manager; the original file is untouched, so online playback is unaffected. Relocate it anywhere via `PODCAST_DIGESTER_AUDIO_OUTPUT_DIR`
+- **Source links:** every library card shows its source (`youtube.com ↗` / `xiaoyuzhoufm.com ↗` …), one click back to the original video
 
 ## 🏗️ Architecture
 
@@ -116,7 +148,7 @@ All distill stages (polish / translate / chapterize / summarize / highlight / in
 
 | `LLM_PROVIDER` | Region | Protocol (`provider_type`) | Default endpoint | Default model | Notes |
 |----------------|:--:|----------------------------|------------------|---------------|-------|
-| `deepseek` | domestic | `openai_compatible` | `api.deepseek.com` | `deepseek-chat` | Recommended, great value |
+| `deepseek` | domestic | `openai_compatible` | `api.deepseek.com` | `deepseek-v4-flash` | Recommended, great value |
 | `glm` | domestic | `openai_compatible` | `open.bigmodel.cn/api/paas/v4` | `glm-4-flash` | Zhipu standard endpoint |
 | `glm-coding` | domestic | `openai_compatible` | `open.bigmodel.cn/api/coding/paas/v4` | *（fetch then pick）* | Zhipu Coding-Plan dedicated endpoint |
 | `qwen` | domestic | `openai_compatible` | `dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` | Tongyi Qianwen |
@@ -128,6 +160,8 @@ All distill stages (polish / translate / chapterize / summarize / highlight / in
 | `anthropic-compatible` | — | `anthropic_compatible` | custom | custom | any Anthropic-compatible endpoint |
 
 > **base_url locking:** named vendors (the first 8 above) have a fixed preset endpoint that cannot be changed; the two "custom-compatible" rows at the bottom let you freely set `base_url`. Different endpoints / plans are split into separate providers (e.g. GLM standard vs Coding-Plan endpoint).
+>
+> **DeepSeek model names:** the legacy `deepseek-chat` / `deepseek-reasoner` names were retired on 2026/07/24 — the endpoint aliases them to the non-thinking / thinking modes of `deepseek-v4-flash`. Use `deepseek-v4-flash` directly (the default; the adapter injects `thinking:disabled` to reproduce non-thinking behavior) or `deepseek-v4-pro`.
 
 ### Switching examples (`.env`)
 
@@ -135,7 +169,7 @@ All distill stages (polish / translate / chapterize / summarize / highlight / in
 # —— DeepSeek (default) ——
 LLM_PROVIDER=deepseek
 LLM_API_KEY=sk-xxxxxxxx
-LLM_MODEL=deepseek-chat          # optional; empty uses the preset default
+LLM_MODEL=deepseek-v4-flash      # optional; empty uses the preset default
 
 # —— Anthropic Claude ——
 LLM_PROVIDER=anthropic
@@ -240,28 +274,24 @@ LLM_API_KEY=sk-xxxxxxxx        # only needed for the env-var option; your DeepSe
 # to switch providers, see "Switching examples" above
 ```
 
-### 4. Run
+### 4. Run (one command starts everything)
 
 ```bash
-./start.sh        # terminal 1: starts API + frontend
+./start.sh        # starts API + frontend + Worker (all backgrounded, logs in logs/)
 ```
 
-> ⚠️ `start.sh` starts **only the API + frontend**, **not the Worker**. The pipeline runs in the Worker, which you must start in a separate terminal — otherwise pasting a link won't trigger processing:
+Open **http://localhost:5173/** and paste a podcast / video link. Paste several in a row if you like — the queue works through them one by one.
 
-```bash
-cd backend && source venv/bin/activate && python worker.py   # terminal 2: Worker
-```
-
-Open **http://localhost:5173/** and paste a podcast / video link.
+> `./start.sh --no-worker` starts only the API + frontend (for when you want to run the Worker manually); `./stop.sh` stops everything.
 
 **Verify the install:** paste any YouTube link (most have auto CC, easiest), and within 1–2 minutes you should see a summary + highlights — that means the deployment succeeded.
 
 ### Common issues
 
-- **Nothing happens after pasting a link** → the Worker isn't running; `start.sh` doesn't include it, so start `python worker.py` in a separate terminal.
+- **Nothing happens after pasting a link** → check `logs/worker.log` to confirm the Worker is up (`./start.sh` starts it by default); if you used `--no-worker`, run `cd backend && source venv/bin/activate && python worker.py` in a separate terminal.
 - **`pip install` fails with `Failed building wheel for av` / `pydantic-core`** → likely **Python 3.14** (missing prebuilt wheels). Switch to 3.11–3.13: `brew install python@3.12`, then re-run `./setup.sh`.
 - **`vite: command not found` after `npm install`** → the machine has `NODE_ENV=production` set globally, so npm skipped devDependencies. Use `npm install --include=dev`, or `unset NODE_ENV` and reinstall (`setup.sh` already has this fallback).
-- **Worker says `Another Worker is already running`** → a Worker is already running, or a stale lock was left after a crash. Remove the lock and retry: `rm /tmp/podcast_worker.pid`.
+- **Worker says `Another Worker is already running`** → a Worker is already running, or a stale lock was left after a crash. Remove the lock and retry: `rm .worker_pid` (project root).
 - **YouTube fetch fails / times out** → usually the network; set a proxy `HTTPS_PROXY=http://127.0.0.1:7897` (adjust to your proxy).
 - **Bilibili download fails** → anti-bot; you need a browser login session (cookie), see "🔑 Getting cookies" above.
 - **A subtitle-less source stalls at transcribe (macOS)** → the AFM 3 bridge wasn't built; re-run `cd backend/tools && ./build_apple_asr.sh` (or `./setup.sh`).
@@ -286,6 +316,11 @@ Core config is via environment variables (see `backend/.env.example`):
 | `PODCAST_DIGESTER_ADMIN_TOKEN` | | empty | Admin-endpoint auth (leave empty for local single-user) |
 | `PODCAST_DIGESTER_MAX_LLM_COST` | | `5.0` | per-episode LLM cost cap (USD); aborts if exceeded |
 | `PODCAST_DIGESTER_MAX_EPISODE_HOURS` | | `5.0` | per-episode length cap (hours) |
+| `PODCAST_DIGESTER_AUTO_GLOSSARY` | | `true` | auto-apply the global glossary after polish on new episodes |
+| `PODCAST_DIGESTER_LLM_CORRECT_TRANSCRIPT` | | `false` | LLM homophone correction before polish (+~100s per episode) |
+| `PODCAST_DIGESTER_AUDIO_OUTPUT_DIR` | | `data/audio_library` | audio library directory (title-named audio copies) |
+| `PODCAST_DIGESTER_WORKER_MAX_DOWNLOAD_RETRIES` | | `3` | max retries for transient download errors |
+| `PODCAST_DIGESTER_WORKER_RETRY_BACKOFF` | | `10` | retry backoff base (seconds), grows as 2^n |
 | `HTTPS_PROXY` / `HTTP_PROXY` | | empty | proxy for reaching YouTube etc. |
 
 Subtitle quality, chapter window, highlight counts, ASR polling, and more are tunable in `backend/app/config.py`.
@@ -296,32 +331,33 @@ Subtitle quality, chapter window, highlight counts, ASR polling, and more are tu
 podcast-digester/
 ├── backend/
 │   ├── app/
-│   │   ├── main.py              # FastAPI entry + route aggregation
+│   │   ├── main.py              # FastAPI entry + route aggregation + frontend static hosting
 │   │   ├── config.py            # env-driven config
-│   │   ├── pipeline.py          # 8-stage pipeline orchestration (resumable)
-│   │   ├── database.py          # SQLite async repository + state machine
+│   │   ├── pipeline.py          # multi-stage pipeline orchestration (resumable)
+│   │   ├── database.py          # SQLite async repository + state machine + migration runner
 │   │   ├── asr_afm3.py          # Apple AFM 3 ASR wrapper
-│   │   ├── routers/             # FastAPI route layer (incl. settings-page LLM config endpoints)
+│   │   ├── routers/             # FastAPI route layer (episodes / export / glossary / subtitles / llm_config …)
 │   │   ├── llm/                 # multi-provider adapter layer (complete() entry)
 │   │   │   ├── client.py        #   unified dispatch by provider_type
 │   │   │   ├── protocols.py     #   OpenAI / Anthropic adapter
 │   │   │   ├── config.py        #   PROVIDERS presets + get_config + SSRF guard (trust by source)
 │   │   │   └── cost.py          #   per-provider/model price table (cost estimate)
 │   │   ├── sources/             # per-platform handlers (youtube/bilibili/douyin/xiaoyuzhou/local)
-│   │   ├── services/            # subtitle alignment / polish / paragraph mapping
+│   │   ├── services/            # subtitle alignment / polish / glossary correction / paragraph mapping
 │   │   ├── llm_pipeline/        # LLM distill tasks: chapter / summary / translate / highlight / insight
-│   │   └── utils/               # cookie / video-title / validation helpers
-│   ├── tests/                   # pytest (unit + integration + smoke, 530+ cases)
+│   │   └── utils/               # cookie / video-title / audio-library / validation helpers
+│   ├── worker.py                # queue Worker (singleton lock · FIFO · orphan recovery · backoff retry)
+│   ├── tests/                   # pytest (unit + integration + smoke, 650+ cases)
 │   └── requirements.txt
 ├── frontend/
 │   ├── src/
 │   │   ├── views/               # LibraryView / PlayerView / SettingsView
-│   │   ├── components/          # UI components
+│   │   ├── components/          # ExportModal / TranscriptEditor / OutlinePane / HighlightCard …
 │   │   └── utils/               # stage progress / formatting
-│   └── tests/                   # Vitest (119 cases)
-├── data/                        # SQLite + media/ep_* (gitignored)
-├── docs/                        # transcript-correction guide
-└── start.sh / stop.sh           # one-click start/stop
+│   └── tests/                   # Vitest (120+ cases)
+├── data/                        # SQLite + media/ep_* + audio_library (gitignored)
+├── docs/                        # screenshots / architecture diagrams / transcript-correction guide
+└── start.sh / stop.sh / setup.sh  # one-click install / start / stop
 ```
 
 ## 🧪 Tests
@@ -329,16 +365,16 @@ podcast-digester/
 CI (GitHub Actions) runs backend pytest + frontend vitest + a frontend build smoke on every push.
 
 ```bash
-# Backend (530+ cases; markers: unit / integration / api / database / llm)
+# Backend (650+ cases; markers: unit / integration / api / database / llm)
 cd backend && source venv/bin/activate && pytest tests
 
 # Unit tests only (fast, no network)
 pytest tests -m unit
 
-# Coverage (~50% measured; CI gate fail-under=45)
+# Coverage (CI gate fail-under=45)
 pytest --cov=app --cov-report=term-missing
 
-# Frontend (119 cases)
+# Frontend (120+ cases)
 cd frontend && npm test
 ```
 
@@ -351,18 +387,22 @@ cd frontend && npm test
 ## 🛣️ Roadmap
 
 - [x] Multi-source (YouTube / Bilibili / Douyin / Xiaoyuzhou / local)
-- [x] Resumable pipeline + per-stage progress
+- [x] Serial queue + resumable pipeline + crash self-healing + download backoff retries
 - [x] Bilingual subtitles (`text_zh` / `text_en`) with click-to-seek
 - [x] Anti-bot auth (Bilibili cookies, subtitle-less fail-fast)
 - [x] Pluggable multi-provider LLM (DeepSeek / OpenAI / Claude / GLM / Qwen / Doubao / Kimi)
 - [x] Settings page to configure the LLM graphically (domestic/overseas grouping · base_url locking · model auto-fetch · test connection)
+- [x] Global glossary correction (batch-correct · editor self-learning · auto-apply to new episodes)
+- [x] HTML export (full cleaned transcript + bolded highlights) and a title-named audio library
 - [ ] More platforms (Twitter/X, TikTok)
+- [ ] Pinyin fuzzy variant discovery (auto-suggested glossary corrections)
 - [ ] Full-text search / cross-episode knowledge graph
 - [ ] Mobile-responsive UI
 
 ## 📚 Docs
 
 - [`docs/transcript-correction-guide.md`](./docs/transcript-correction-guide.md) — Transcript-correction guide (Chinese)
+- [`CHANGELOG.md`](./CHANGELOG.md) — Changelog
 - [`CONTRIBUTING.md`](./CONTRIBUTING.md) — Contribution guide
 
 ## 🙏 Acknowledgements
