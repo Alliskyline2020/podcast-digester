@@ -292,8 +292,10 @@
               </div>
               <div v-if="batchPreview" class="glossary-batch-result">
                 <span>字幕命中 {{ batchPreview.transcript_matches }} 段</span>
+                <span v-if="batchPreview.paragraph_matches > 0">· 段落 {{ batchPreview.paragraph_matches }}</span>
+                <span v-if="batchPreview.title_match > 0">· 标题</span>
                 <template v-for="(v, k) in batchPreview.modules" :key="k">
-                  <span v-if="v > 0">· {{ ({outline:'章节',summaries:'摘要',highlight:'金句',product_insights:'洞察'})[k] || k }} {{ v }}</span>
+                  <span v-if="v > 0">· {{ ({outline:'章节',summaries:'摘要',highlight:'金句',product_insights:'洞察',paragraphs:'段落',title:'标题'})[k] || k }} {{ v }}</span>
                 </template>
               </div>
             </div>
@@ -1011,7 +1013,11 @@ const batchCorrectPreview = async () => {
   try {
     const r = await api.batchCorrect(episodeId.value, batchCorrectText.value, batchWrongText.value, false)
     batchPreview.value = r.preview
-    glossaryNotice.value = `✅ 已入词库「${batchCorrectText.value} ← ${batchWrongText.value}」· 字幕命中 ${r.preview.transcript_matches} 段（点"应用全篇"生效）`
+    const p = r.preview
+    const hits = [`字幕 ${p.transcript_matches} 段`]
+    if (p.paragraph_matches > 0) hits.push(`段落 ${p.paragraph_matches}`)
+    if (p.title_match > 0) hits.push('标题')
+    glossaryNotice.value = `✅ 已入词库「${batchCorrectText.value} ← ${batchWrongText.value}」· 命中 ${hits.join('·')}（点"应用全篇"生效）`
   } catch (e) {
     glossaryNotice.value = '❌ 预览失败：' + (e.message || '未知错误')
   } finally {
@@ -1025,11 +1031,14 @@ const batchCorrectApply = async () => {
   if (!batchWrongText.value || !batchCorrectText.value) return
   if (!confirm(`确认把本集全部「${batchWrongText.value}」改成「${batchCorrectText.value}」并写入词库？`)) return
   batchBusy.value = true
-  glossaryNotice.value = '⏳ 应用中（字幕+章节+摘要+金句+洞察）…'
+  glossaryNotice.value = '⏳ 应用中（字幕+段落+标题+章节+摘要+金句+洞察）…'
   try {
     const r = await api.batchCorrect(episodeId.value, batchCorrectText.value, batchWrongText.value, true)
     const p = r.preview
-    glossaryNotice.value = `✅ 已应用：字幕 ${p.transcript_matches} 段·已入词库`
+    const parts = [`字幕 ${p.transcript_matches} 段`]
+    if (p.paragraph_matches > 0) parts.push(`段落 ${p.paragraph_matches}`)
+    if (p.title_match > 0) parts.push('标题')
+    glossaryNotice.value = `✅ 已应用：${parts.join('·')}·已入词库`
     batchWrongText.value = ''
     batchCorrectText.value = ''
     batchPreview.value = null

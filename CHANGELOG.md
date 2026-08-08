@@ -11,7 +11,7 @@
 - **启动恢复补全 ASR 阶段**：服务重启时撞见「ASR 未完成」的任务，现能从 `source`/`usage_log` 解析原始输入并经 `resume_episode` 重跑；解析不到时置 `failed` 并给出可操作的错误提示。
 - **CI（GitHub Actions）**：后端 pytest（带覆盖率闸门 `fail-under=45`）+ 前端 vitest + 前端构建冒烟；Dependabot 周更。
 - **应用启动冒烟测试**：真实 HTTP 打 `GET /` 健康端点。
-- **全局词库纠错（改一次、全篇生效、永久沉淀）**：词库面板新增「批量纠错」子区——输入错词与正确写法，先预览字幕 / 章节 / 摘要 / 金句 / 洞察五个模块的命中数，确认后一键全篇应用并自动沉淀入词库（`POST /api/episodes/{id}/batch-correct`）；新播客 polish 后自动确定性套用全局词库（`PODCAST_DIGESTER_AUTO_GLOSSARY`，默认开），下游摘要 / 金句 / 洞察自动继承纠错结果；词库同时注入字幕清洗 prompt 作为权威术语表。
+- **全局词库纠错（改一次、全篇生效、永久沉淀）**：词库面板新增「批量纠错」子区——输入错词与正确写法，先预览各处的命中数，确认后一键全篇应用并自动沉淀入词库（`POST /api/episodes/{id}/batch-correct`）。覆盖范围：字幕 segments、**播放器段落显示文本 paragraph_mappings（含翻译后的中文译文）**、**节目标题（首页卡片与播放器头部）**、章节 / 摘要 / 金句 / 洞察四个下游模块；新播客 polish 后自动确定性套用全局词库（`PODCAST_DIGESTER_AUTO_GLOSSARY`，默认开），下游摘要 / 金句 / 洞察自动继承纠错结果；词库同时注入字幕清洗 prompt 作为权威术语表。
 - **字幕编辑器纠错自学习**：保存单句修改时自动把「错词 → 对词」沉淀入词库；等长编辑（如同音字人名 `杨志玲 → 杨植麟`）也能可靠识别——改用 difflib 差异比对 + 中文字符回溯扩展，抓取完整人名而非碎片变体，避免误伤无关文本。
 - **Worker 队列自愈与断点续传**：单 owner（项目根 `.worker_pid` 锁）+ 5s 轮询 FIFO；进程崩溃留下的 mid-state 孤儿任务在启动时自动重置重排；`resume_episode` 精确续点（逐阶段产物校验 + 级联失效）；ASR / LLM 瞬态失败跨轮次指数退避重试（默认 3 次，可用 `PODCAST_DIGESTER_WORKER_MAX_DOWNLOAD_RETRIES` / `PODCAST_DIGESTER_WORKER_RETRY_BACKOFF` 调整）；音频下载多策略 fallback + CDN 节点预检。
 - **来源链接**：播放器页与节目库卡片均显示来源平台链接（如 `youtube.com ↗`），一键跳回原视频 / 播客；本地路径来源不渲染链接。

@@ -370,3 +370,98 @@ async def test_batch_correct_apply_rewrites_transcript_and_modules(
     bundle = await load_episode_bundle(ep_id)
     joined = "".join(s.text_original for s in bundle.transcript.segments)
     assert "杨植麟" in joined and "杨志林" not in joined
+
+
+async def _seed_episode_with_paragraphs_and_title(client: TestClient) -> str:
+    """创建带 paragraph_mappings + 中文标题的 episode（两者都含错字）。
+
+    paragraph_mappings 是 segments 的合并副本（播放器实际显示的段落文本，
+    含 text_translated 译文），title_zh 是首页卡片显示标题——两者都不随
+    transcript segments 纠错自动更新，必须单独覆盖。
+    """
+    ep_id = await _seed_episode_with_segments(client, ["杨志林是教授"])
+    await EpisodeRepository.update(
+        ep_id,
+        title_zh="对话杨志林：AI 记忆之路",
+        paragraph_mappings=[
+            {
+                "id": 0,
+                "start_ms": 0,
+                "end_ms": 5000,
+                "segment_indices": [0],
+                "text_original": "杨志林是教授",
+                "text_clean": "杨志林是教授",
+                "text_translated": "杨志林是教授",
+            },
+            {
+                "id": 1,
+                "start_ms": 5000,
+                "end_ms": 10000,
+                "segment_indices": [1],
+                "text_original": "没有错字的段落",
+                "text_clean": "没有错字的段落",
+                "text_translated": "",
+            },
+        ],
+    )
+    return ep_id
+
+
+@pytest.mark.asyncio
+async def test_batch_correct_preview_counts_paragraphs_and_title(
+    temp_db, temp_data_dir
+):
+    """预览命中数必须覆盖 paragraph_mappings（含译文）和标题，且不改文本。"""
+    from app.main import app
+
+    client = TestClient(app)
+    ep_id = await _seed_episode_with_paragraphs_and_title(client)
+
+    resp = client.post(
+        f"/api/episodes/{ep_id}/batch-correct",
+        json={"correct": "杨植麟", "wrong": "杨志林", "apply": False},
+    )
+
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+    preview = resp.json()["preview"]
+    assert preview["paragraph_matches"] == 1  # 只有段落 0 命中
+    assert preview["title_match"] == 1
+
+    # 预览不改任何文本
+    ep = await EpisodeRepository.get_by_id(ep_id)
+    assert "杨志林" in ep["title_zh"]
+    assert "杨志林" in ep["paragraph_mappings"][0]["text_clean"]
+
+
+@pytest.mark.asyncio
+async def test_batch_correct_apply_rewrites_paragraphs_and_title(
+    temp_db, temp_data_dir
+):
+    """应用后 paragraph_mappings 各文本字段（含 text_translated 译文）与标题同步纠正。"""
+    import json as _json
+    from app.main import app
+
+    client = TestClient(app)
+    ep_id = await _seed_episode_with_paragraphs_and_title(client)
+
+    resp = client.post(
+        f"/api/episodes/{ep_id}/batch-correct",
+        json={"correct": "杨植麟", "wrong": "杨志林", "apply": True},
+    )
+
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+    body = resp.json()
+    assert body["applied"] is True
+    assert body["preview"]["paragraph_matches"] == 1
+    assert body["preview"]["title_match"] == 1
+
+    ep = await EpisodeRepository.get_by_id(ep_id)
+    assert ep["title_zh"] == "对话杨植麟：AI 记忆之路"
+
+    pm = ep["paragraph_mappings"]
+    assert "杨植麟" in pm[0]["text_original"]
+    assert "杨植麟" in pm[0]["text_clean"]
+    assert "杨植麟" in pm[0]["text_translated"]
+    # 未命中的段落保持原样；错字在全 JSON 中消失
+    assert pm[1]["text_clean"] == "没有错字的段落"
+    assert "杨志林" not in _json.dumps(pm, ensure_ascii=False)

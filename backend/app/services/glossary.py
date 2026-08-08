@@ -349,3 +349,66 @@ def apply_glossary_to_all_modules(
 
     logger.info(f"[Glossary Apply All] {episode_id}: {counts}")
     return counts
+
+
+def apply_glossary_to_paragraph_mappings(
+    glossary: "Glossary",
+    paragraph_mappings: list,
+) -> tuple[list, int]:
+    """对 paragraph_mappings（播放器实际显示的段落文本）套用词库纠错。
+
+    paragraph_mappings 是 segments 的合并副本（text_original/text_clean/
+    text_translated），纠 transcript segments 不会自动传播到这里——
+    播放器优先读 paragraph_mappings，必须单独纠。
+
+    Args:
+        glossary: 词库实例（用 correct_text 方法）
+        paragraph_mappings: episode.paragraph_mappings 解码后的 list
+
+    Returns:
+        (新的 paragraph_mappings, 被改过的段落数)。不改动入参。
+    """
+    corrected: list = []
+    changed_count = 0
+    for para in paragraph_mappings or []:
+        if not isinstance(para, dict):
+            corrected.append(para)
+            continue
+        new_para = dict(para)
+        changed = False
+        for field in ("text_original", "text_clean", "text_translated", "text_zh", "text_en"):
+            val = new_para.get(field)
+            if not isinstance(val, str) or not val:
+                continue
+            new_val = glossary.correct_text(val)
+            if new_val != val:
+                new_para[field] = new_val
+                changed = True
+        corrected.append(new_para)
+        if changed:
+            changed_count += 1
+    return corrected, changed_count
+
+
+def correct_episode_titles(glossary: "Glossary", ep_data: dict) -> tuple[dict, int]:
+    """纠正 episode 的 title / title_zh（首页卡片与播放器头部显示）。
+
+    Args:
+        glossary: 词库实例（用 correct_text 方法）
+        ep_data: EpisodeRepository.get_by_id 的返回字典
+
+    Returns:
+        (可直接传给 EpisodeRepository.update 的字段 dict, 命中字段数)。
+        不改动入参。
+    """
+    updates: dict = {}
+    hits = 0
+    for field in ("title", "title_zh"):
+        val = ep_data.get(field)
+        if not isinstance(val, str) or not val:
+            continue
+        new_val = glossary.correct_text(val)
+        if new_val != val:
+            updates[field] = new_val
+            hits += 1
+    return updates, hits

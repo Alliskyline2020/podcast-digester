@@ -580,22 +580,34 @@ async def apply_glossary_to_episode(episode_id: str) -> CorrectTranscriptRespons
     # 6. 同步词库到所有下游产物(outline/summaries/highlight/product_insights)
     # 专有名词纠错是词级替换,语义不变,纯字符串替换即可,不需要 LLM 重算。
     # 字幕编辑后下游产物会过期,这里一次性把同样的替换应用到所有模块。
+    from ..services.glossary import (
+        apply_glossary_to_paragraph_mappings,
+        correct_episode_titles,
+    )
     media_dir = deps.data_dir / "media" / episode_id
     modules_corrected = apply_glossary_to_all_modules(glossary, episode_id, media_dir)
 
     duration_ms = int((time.time() - start_time) * 1000)
 
+    # 7. paragraph_mappings（播放器段落显示文本，含译文）+ 标题同步纠正。
+    # paragraph_mappings 是 segments 的合并副本，纠 transcript 不会传播到这里；
+    # 标题（title/title_zh）同样独立存储，需显式纠正。
+    corrected_pm, pm_count = apply_glossary_to_paragraph_mappings(
+        glossary, ep_data.get("paragraph_mappings") or []
+    )
+    title_updates, title_hits = correct_episode_titles(glossary, ep_data)
+    update_fields = dict(title_updates)
+    if pm_count > 0:
+        update_fields["paragraph_mappings"] = corrected_pm
+    if update_fields:
+        await EpisodeRepository.update(episode_id, **update_fields)
+    modules_corrected["paragraphs"] = pm_count
+    modules_corrected["title"] = title_hits
+
     logger.info(
         f"[Glossary Apply] Episode {episode_id}: transcript {corrected_count}/{total_segments} segments, "
         f"downstream modules {modules_corrected}"
     )
-
-    # 7. 如果字幕有纠正，同步 paragraph_mappings（不改段落结构）
-    if corrected_count > 0:
-        create_background_task(
-            sync_episode_modules(episode_id, corrected_data["segments"], regenerate_paragraphs=False),
-            name=f"sync_modules:{episode_id}",
-        )
 
     return CorrectTranscriptResponse(
         episode_id=episode_id,
@@ -619,6 +631,8 @@ class BatchCorrectPreview(BaseModel):
     """批量纠错预览结果"""
     transcript_matches: int
     modules: dict[str, int]
+    paragraph_matches: int = 0  # paragraph_mappings（播放器段落显示文本，含译文）命中数
+    title_match: int = 0        # title/title_zh 命中字段数
 
 
 class BatchCorrectResponse(BaseModel):
@@ -647,7 +661,7 @@ def _count_glossary_hits(glossary, transcript_dict) -> int:
 
 @router.post("/api/episodes/{episode_id}/batch-correct", response_model=BatchCorrectResponse)
 async def batch_correct_episode(episode_id: str, request: BatchCorrectRequest) -> BatchCorrectResponse:
-    """批量纠错：输一次 错误→正确，预览或应用到当集字幕+章节+摘要+金句+洞察，并入词库。
+    """批量纠错：输一次 错误→正确，预览或应用到当集字幕+段落显示文本+标题+章节+摘要+金句+洞察，并入词库。
 
     - apply=False（默认）：入词库 + 返回命中数预览，不改任何文本。
     - apply=True：复用 apply_glossary 全模块字符串替换，落盘 + 写 DB。
@@ -659,7 +673,12 @@ async def batch_correct_episode(episode_id: str, request: BatchCorrectRequest) -
     if not ep_data:
         raise HTTPException(status_code=404, detail="节目不存在")
 
-    from ..services.glossary import get_glossary, apply_glossary_to_all_modules
+    from ..services.glossary import (
+        get_glossary,
+        apply_glossary_to_all_modules,
+        apply_glossary_to_paragraph_mappings,
+        correct_episode_titles,
+    )
     from ..services.glossary_apply import apply_glossary_to_segments
 
     glossary = get_glossary(deps.data_dir)
@@ -668,21 +687,34 @@ async def batch_correct_episode(episode_id: str, request: BatchCorrectRequest) -
     glossary.add_entry(request.correct, [request.wrong])
     added = True
 
-    # 2) 预览命中
+    # 2) 预览命中（segments + paragraph_mappings + 标题）
     bundle = await load_episode_bundle(episode_id)
     transcript_dict = bundle.transcript.model_dump() if bundle.transcript else {"segments": []}
     transcript_matches = _count_glossary_hits(glossary, transcript_dict)
+    corrected_pm, paragraph_matches = apply_glossary_to_paragraph_mappings(
+        glossary, ep_data.get("paragraph_mappings") or []
+    )
+    title_updates, title_match = correct_episode_titles(glossary, ep_data)
 
     applied = False
     modules: dict[str, int] = {}
     if request.apply:
-        # 3) 应用到 transcript（使用 Task 2 的 helper，修正全部 5 个字段）
+        # 3) 应用到 transcript（修正全部 5 个字段）
         apply_glossary_to_segments(glossary, bundle.transcript)
         await EpisodeRepository.update_transcript(episode_id, bundle.transcript.model_dump())
 
         # 4) 应用到 4 个下游模块
         media_dir = deps.data_dir / "media" / episode_id
         modules = apply_glossary_to_all_modules(glossary, episode_id, media_dir)
+
+        # 5) 应用到 paragraph_mappings（播放器段落显示文本，含译文）+ 标题
+        update_fields = dict(title_updates)
+        if paragraph_matches > 0:
+            update_fields["paragraph_mappings"] = corrected_pm
+        if update_fields:
+            await EpisodeRepository.update(episode_id, **update_fields)
+        modules["paragraphs"] = paragraph_matches
+        modules["title"] = title_match
         applied = True
         logger.info(f"[BatchCorrect] {episode_id}: applied {request.wrong}->{request.correct}")
 
@@ -690,7 +722,12 @@ async def batch_correct_episode(episode_id: str, request: BatchCorrectRequest) -
         success=True,
         added_to_glossary=added,
         applied=applied,
-        preview=BatchCorrectPreview(transcript_matches=transcript_matches, modules=modules),
+        preview=BatchCorrectPreview(
+            transcript_matches=transcript_matches,
+            modules=modules,
+            paragraph_matches=paragraph_matches,
+            title_match=title_match,
+        ),
     )
 
 

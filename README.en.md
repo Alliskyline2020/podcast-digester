@@ -102,7 +102,7 @@ ASR filler words, stuttering, and name / terminology errors are handled in two l
 
 **Layer 2 · Global glossary:** every name / term you correct is stored as "correct form ← wrong variants" — **fix once, benefit forever**:
 
-- **Batch correction:** in the player's glossary panel, enter "wrong → right", **preview the hit counts** (subtitles N segments · chapters N · summaries N · highlights N · insights N), then apply to **all five modules** in one click — the entry is added to the glossary automatically
+- **Batch correction:** in the player's glossary panel, enter "wrong → right", **preview the hit counts** (subtitles N segments · paragraphs N · title · chapters N · summaries N · highlights N · insights N), then apply to **all seven places** in one click — including the paragraph text the player actually renders (`paragraph_mappings`, with the translated Chinese) and the library-card title, leaving no stale copies behind. The entry is added to the glossary automatically
 - **Editor self-learning:** editing a word in the subtitle editor (even equal-length edits like `杨志玲→杨植麟`) auto-adds it to the glossary via difflib diffing + CJK backtracking that captures the **full name** — never a fragment like "植麟←志玲" that would damage unrelated text
 - **Auto-apply to new episodes:** the glossary is shared globally; every new episode gets a **deterministic apply** of all entries after polish (`PODCAST_DIGESTER_AUTO_GLOSSARY`, on by default) — the transcript is clean at the source, so downstream summaries / highlights / insights inherit the corrections
 - **Idempotent & safe:** string replacement only hits wrong variants — already-correct text is never re-modified; entries merge with dedup, so re-applying never creates duplicates
